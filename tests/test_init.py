@@ -70,11 +70,11 @@ class TestRun:
         assert vs_mock.MoveTo.call_count > 0
         # 3D 鉄筋が描かれる
         assert vs_mock.Poly3D.call_count > 0
-        # 両方の断面 2D コンポーネントが設定される
+        # Top/Plan (10) と両方の断面 2D コンポーネント (6/9) が設定される
         components = {
             c.args[2] for c in vs_mock.Set2DComponentGroup.call_args_list
         }
-        assert components == {6, 9}
+        assert components == {6, 9, 10}
         # エラーメッセージは出ない
         assert not vs_mock.Message.called
 
