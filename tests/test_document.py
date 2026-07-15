@@ -15,19 +15,17 @@ def make_document(**overrides: Any) -> Dict[str, Any]:
     document: Dict[str, Any] = {
         'version': DOCUMENT_VERSION,
         'plan_lines': [
-            {'class': 'C', 'start': [0.0, 0.0], 'end': [100.0, 0.0]},
+            {'start': [0.0, 0.0], 'end': [100.0, 0.0]},
         ],
         'cut_lines': [
             {
                 'target': 'front_back',
-                'class': 'C',
                 'start': [0.0, -75.0],
                 'end': [100.0, -75.0],
             },
         ],
         'bars_3d': [
             {
-                'class': 'C',
                 'vertices': [[0.0, 0.0, -75.0], [100.0, 0.0, -75.0]],
                 'closed': False,
             },
@@ -69,12 +67,6 @@ class TestValidateDocument:
     def test_bad_point(self) -> None:
         document = make_document()
         document['plan_lines'][0]['start'] = [0.0]
-        with pytest.raises(ValueError):
-            validate_document(document)
-
-    def test_empty_class(self) -> None:
-        document = make_document()
-        document['plan_lines'][0]['class'] = ''
         with pytest.raises(ValueError):
             validate_document(document)
 

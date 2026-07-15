@@ -1,9 +1,10 @@
 """描画プリミティブ。vs だけに依存する。
 
-命令セットの line / 3D ポリゴンを vs API で描画する。図形の描画属性
-(線の太さ・色・線種等)はすべて by-class 属性に従わせ、ユーザーが
-クラス側で線種・色を調整できるようにする(homeskz の規約と同じ)。
-存在しないクラスは ``SetClass`` 時に VW が自動生成する。
+命令セットの line / 3D ポリゴンを vs API で描画する。図形の作図クラスは
+**PIO 本体の描画クラス**(呼び出し側が ``vs.GetClass(pio)`` で取得して
+渡す)に揃え、描画属性(線の太さ・色・線種等)はすべて by-class 属性に
+従わせる。クラス指定は PIO を扱う側(= PIO 本体へのクラス割り当て)で
+管理するため、このパッケージは固有のクラス名を持たない。
 """
 from __future__ import annotations
 
@@ -15,10 +16,13 @@ import vs
 def set_class_with_attributes(handle: Any, class_name: str) -> None:
     """クラスを割り当て、描画属性をすべてクラス属性に従わせる。
 
-    ``SetClass`` はクラスを割り当てるだけで各描画属性は by-instance の
-    既定値のまま残るため、属性ごとの by-class 設定関数を個別に呼ぶ。
+    class_name が空(PIO のクラスを取得できない場合)はクラス割り当てを
+    省くが、属性は by-class に設定する。``SetClass`` はクラスを割り当てる
+    だけで各描画属性は by-instance の既定値のまま残るため、属性ごとの
+    by-class 設定関数を個別に呼ぶ。
     """
-    vs.SetClass(handle, class_name)
+    if class_name:
+        vs.SetClass(handle, class_name)
     vs.SetPenColorByClass(handle)
     vs.SetFillColorByClass(handle)
     vs.SetLWByClass(handle)

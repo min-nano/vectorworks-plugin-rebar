@@ -13,11 +13,6 @@ from vectorworks_plugin_rebar.document import (
     validate_document,
 )
 from vectorworks_plugin_rebar.rebar import build_document
-from vectorworks_plugin_rebar.rebar.classes import (
-    CLASS_SLAB_BOTTOM,
-    CLASS_SLAB_SINGLE,
-    CLASS_SLAB_TOP,
-)
 from vectorworks_plugin_rebar.rebar.spec import SpecError
 
 # 2000×3000 の矩形スラブ (天端 z=0)
@@ -55,10 +50,6 @@ class TestSingleLayer:
         # 主筋 (X 方向 @200, Y 幅 3000, 重心基準) 15 本 + 配力筋
         # (Y 方向 @150, X 幅 2000) 13 本
         assert len(document['plan_lines']) == 28
-        assert all(
-            line['class'] == CLASS_SLAB_SINGLE
-            for line in document['plan_lines']
-        )
 
     def test_bars_3d_at_center_of_thickness(self) -> None:
         document = build_document(make_params())
@@ -118,7 +109,7 @@ class TestSingleLayer:
 
 
 class TestDoubleLayer:
-    def test_layers_and_classes(self) -> None:
+    def test_plan_lines_doubled(self) -> None:
         document = build_document(
             make_params(
                 double_layer=True,
@@ -126,9 +117,7 @@ class TestDoubleLayer:
                 top_dist_bar='D13@150',
             )
         )
-        classes = {line['class'] for line in document['plan_lines']}
-        assert classes == {CLASS_SLAB_TOP, CLASS_SLAB_BOTTOM}
-        # 平面線はシングルの 2 倍
+        # 平面線はシングルの 2 倍 (上端筋 + 下端筋)
         assert len(document['plan_lines']) == 56
 
     def test_bar_elevations(self) -> None:

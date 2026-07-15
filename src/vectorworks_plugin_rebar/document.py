@@ -4,6 +4,10 @@
 描画フェーズ(``vw`` パッケージ)が消費する JSON 直列化可能な dict。
 このモジュールは vs に依存しない。
 
+図形の作図クラスは命令セットには含まれない。すべての図形は描画フェーズが
+PIO 本体の描画クラス(``vs.GetClass(pio)``)に割り当てる(クラス指定は
+PIO を扱う側=PIO 本体へのクラス割り当てで管理する)。
+
 スキーマ (version 1):
 
     {
@@ -12,7 +16,6 @@
             {
                 # 平面ビュー(Top/Plan コンポーネント=PIO 本体)に描く 2D 線。
                 # 座標は PIO のローカル座標 (mm)。
-                "class": "04構造-05配筋-01スラブ筋",  # 割り当てるクラス名
                 "start": [x1, y1],
                 "end": [x2, y2]
             }
@@ -28,7 +31,6 @@
                 #   "left_right" = 左右の断面 (2D component 定数 9,
                 #                  紙面 u=ローカル Y, v=ローカル Z)
                 "target": "front_back",
-                "class": "04構造-05配筋-01スラブ筋",
                 "start": [u1, v1],
                 "end": [u2, v2]
             }
@@ -37,7 +39,6 @@
             {
                 # 3D 表現(鉄筋の 3D ポリゴン)。閉じた形状(あばら筋等)は
                 # closed=true。座標は PIO のローカル座標 (mm)。
-                "class": "04構造-05配筋-04梁主筋",
                 "vertices": [[x1, y1, z1], [x2, y2, z2]],
                 "closed": false
             }
@@ -59,34 +60,20 @@ TARGET_FRONT_BACK = 'front_back'
 TARGET_LEFT_RIGHT = 'left_right'
 CUT_TARGETS = (TARGET_FRONT_BACK, TARGET_LEFT_RIGHT)
 
-# class キー(作図クラス名)が予約語のため functional 構文で定義する。
-PlanLineCommand = TypedDict(
-    'PlanLineCommand',
-    {
-        'class': str,
-        'start': List[float],
-        'end': List[float],
-    },
-)
+class PlanLineCommand(TypedDict):
+    start: List[float]
+    end: List[float]
 
-CutLineCommand = TypedDict(
-    'CutLineCommand',
-    {
-        'target': str,
-        'class': str,
-        'start': List[float],
-        'end': List[float],
-    },
-)
 
-Bar3DCommand = TypedDict(
-    'Bar3DCommand',
-    {
-        'class': str,
-        'vertices': List[List[float]],
-        'closed': bool,
-    },
-)
+class CutLineCommand(TypedDict):
+    target: str
+    start: List[float]
+    end: List[float]
+
+
+class Bar3DCommand(TypedDict):
+    vertices: List[List[float]]
+    closed: bool
 
 
 class Document(TypedDict):
@@ -105,16 +92,10 @@ def _validate_point_2d(value: Any, where: str) -> None:
         raise ValueError(f'{where} は [x, y] の数値ペアである必要があります: {value!r}')
 
 
-def _validate_class(command: Any, where: str) -> None:
-    if not isinstance(command.get('class'), str) or not command['class']:
-        raise ValueError(f'{where} の class は空でない文字列である必要があります')
-
-
 def _validate_plan_line(command: Any, index: int) -> None:
     where = f'plan_lines[{index}]'
     if not isinstance(command, dict):
         raise ValueError(f'{where} は dict である必要があります')
-    _validate_class(command, where)
     _validate_point_2d(command.get('start'), f'{where}.start')
     _validate_point_2d(command.get('end'), f'{where}.end')
 
@@ -128,7 +109,6 @@ def _validate_cut_line(command: Any, index: int) -> None:
             f'{where}.target は {CUT_TARGETS} のいずれかである必要があります: '
             f'{command.get("target")!r}'
         )
-    _validate_class(command, where)
     _validate_point_2d(command.get('start'), f'{where}.start')
     _validate_point_2d(command.get('end'), f'{where}.end')
 
@@ -137,7 +117,6 @@ def _validate_bar_3d(command: Any, index: int) -> None:
     where = f'bars_3d[{index}]'
     if not isinstance(command, dict):
         raise ValueError(f'{where} は dict である必要があります')
-    _validate_class(command, where)
     vertices = command.get('vertices')
     if not isinstance(vertices, list) or len(vertices) < 2:
         raise ValueError(f'{where}.vertices は 2 点以上の頂点リストである必要があります')

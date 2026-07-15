@@ -14,25 +14,22 @@ def make_document() -> Dict[str, Any]:
     return {
         'version': DOCUMENT_VERSION,
         'plan_lines': [
-            {'class': '配筋クラスA', 'start': [0.0, 0.0], 'end': [100.0, 0.0]},
-            {'class': '配筋クラスA', 'start': [0.0, 50.0], 'end': [100.0, 50.0]},
+            {'start': [0.0, 0.0], 'end': [100.0, 0.0]},
+            {'start': [0.0, 50.0], 'end': [100.0, 50.0]},
         ],
         'cut_lines': [
             {
                 'target': 'front_back',
-                'class': '配筋クラスA',
                 'start': [0.0, -75.0],
                 'end': [100.0, -75.0],
             },
         ],
         'bars_3d': [
             {
-                'class': '配筋クラスA',
                 'vertices': [[0.0, 0.0, -75.0], [100.0, 0.0, -75.0]],
                 'closed': False,
             },
             {
-                'class': '配筋クラスB',
                 'vertices': [
                     [0.0, -110.0, -40.0],
                     [0.0, 110.0, -40.0],
@@ -57,6 +54,8 @@ def _make_vs_mock() -> MagicMock:
 
     vs_mock.LNewObj.side_effect = new_obj
     vs_mock.Set2DComponentGroup.return_value = True
+    # PIO 本体の描画クラス (すべての図形をこのクラスに割り当てる)
+    vs_mock.GetClass.return_value = 'PIOクラス'
     return vs_mock
 
 
@@ -91,9 +90,10 @@ class TestExecuteDocument:
         assert vs_mock.LineTo.call_count == 3
         assert vs_mock.MoveTo.call_args_list[0].args[0] == (0.0, 0.0)
         assert vs_mock.LineTo.call_args_list[0].args[0] == (100.0, 0.0)
-        # すべての図形にクラスを割り当て、属性を by-class にする
-        class_names = [c.args[1] for c in vs_mock.SetClass.call_args_list]
-        assert '配筋クラスA' in class_names
+        # すべての図形を PIO 本体の描画クラスに割り当て、属性を by-class にする
+        vs_mock.GetClass.assert_called_once_with(PIO_HANDLE)
+        class_names = {c.args[1] for c in vs_mock.SetClass.call_args_list}
+        assert class_names == {'PIOクラス'}
         assert vs_mock.SetLWByClass.call_count == vs_mock.SetClass.call_count
 
     def test_bars_3d_drawn_as_polys(self) -> None:

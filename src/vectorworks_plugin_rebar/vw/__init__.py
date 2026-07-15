@@ -3,6 +3,10 @@
 命令セットを検証(``validate_document``)してから vs API で描画する。
 配筋の知識(ピッチ・かぶり等)は持たず、命令セットの図形をそのまま描く。
 
+すべての図形は **PIO 本体の描画クラス**(``vs.GetClass(pio)``)に割り当て、
+描画属性を by-class にする(クラス指定は PIO を扱う側=PIO 本体への
+クラス割り当てで管理する)。
+
 描画順:
 
 1. 平面線(plan_lines) — PIO 本体(Top/Plan)の 2D 表現。
@@ -27,8 +31,17 @@ from .draw import draw_line_2d, draw_poly_3d
 __all__ = ['execute_document']
 
 
+def _pio_class(pio_handle: Any) -> str:
+    """PIO 本体の描画クラス名を返す。取得できない場合は空文字。"""
+    try:
+        name = vs.GetClass(pio_handle)
+    except Exception:
+        return ''
+    return name if isinstance(name, str) else ''
+
+
 def _execute_cut_lines(
-    pio_handle: Any, commands: List[CutLineCommand]
+    pio_handle: Any, commands: List[CutLineCommand], class_name: str
 ) -> int:
     """cut_lines を target ごとの 2D コンポーネントグループとして設定する。"""
     by_target: Dict[str, List[CutLineCommand]] = {
@@ -46,7 +59,7 @@ def _execute_cut_lines(
             continue
         vs.BeginGroup()
         for line in lines:
-            draw_line_2d(line['start'], line['end'], line['class'])
+            draw_line_2d(line['start'], line['end'], class_name)
         vs.EndGroup()
         group = vs.LNewObj()
         if set_component_group(pio_handle, group, component):
@@ -61,13 +74,16 @@ def _execute_cut_lines(
 def execute_document(document: Any, pio_handle: Any) -> Dict[str, int]:
     """命令セットを検証してから描画し、実行数を返す。"""
     validated = validate_document(document)
+    class_name = _pio_class(pio_handle)
 
     counts = {'plan_lines': 0, 'cut_lines': 0, 'bars_3d': 0}
     for plan_line in validated['plan_lines']:
-        draw_line_2d(plan_line['start'], plan_line['end'], plan_line['class'])
+        draw_line_2d(plan_line['start'], plan_line['end'], class_name)
         counts['plan_lines'] += 1
     for bar in validated['bars_3d']:
-        draw_poly_3d(bar['vertices'], bar['closed'], bar['class'])
+        draw_poly_3d(bar['vertices'], bar['closed'], class_name)
         counts['bars_3d'] += 1
-    counts['cut_lines'] = _execute_cut_lines(pio_handle, validated['cut_lines'])
+    counts['cut_lines'] = _execute_cut_lines(
+        pio_handle, validated['cut_lines'], class_name
+    )
     return counts

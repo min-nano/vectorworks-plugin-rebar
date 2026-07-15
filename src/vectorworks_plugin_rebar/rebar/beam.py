@@ -32,7 +32,6 @@ from ..document import (
     TARGET_FRONT_BACK,
     TARGET_LEFT_RIGHT,
 )
-from .classes import CLASS_BEAM_MAIN, CLASS_BEAM_STIRRUP
 from .slab import cross_cut_lines
 from .spec import BarCount, BarPitch, SectionSize, SpecError
 
@@ -151,7 +150,6 @@ def build_beam_commands(
                 end = segment.point_at(segment.length, offset)
                 plan_lines.append(
                     {
-                        'class': CLASS_BEAM_MAIN,
                         'start': [start[0], start[1]],
                         'end': [end[0], end[1]],
                     }
@@ -161,7 +159,6 @@ def build_beam_commands(
             end = segment.point_at(segment.length, offset)
             bars_3d.append(
                 {
-                    'class': CLASS_BEAM_MAIN,
                     'vertices': [
                         [start[0], start[1], segment.z_top + z],
                         [end[0], end[1], segment.z_top + z],
@@ -176,14 +173,12 @@ def build_beam_commands(
                 right = segment.point_at(along, half_width)
                 plan_lines.append(
                     {
-                        'class': CLASS_BEAM_STIRRUP,
                         'start': [left[0], left[1]],
                         'end': [right[0], right[1]],
                     }
                 )
                 bars_3d.append(
                     {
-                        'class': CLASS_BEAM_STIRRUP,
                         'vertices': [
                             [left[0], left[1], segment.z_top + z_stirrup_top],
                             [right[0], right[1], segment.z_top + z_stirrup_top],
@@ -222,7 +217,6 @@ def build_beam_commands(
             cut_lines.append(
                 {
                     'target': cross_target,
-                    'class': CLASS_BEAM_STIRRUP,
                     'start': [start[0], start[1]],
                     'end': [end[0], end[1]],
                 }
@@ -231,13 +225,7 @@ def build_beam_commands(
     for offset, z, dia in main_bars:
         u = center_u + offset * lateral_sign
         cut_lines.extend(
-            cross_cut_lines(
-                cross_target,
-                CLASS_BEAM_MAIN,
-                u,
-                z_top_abs + z,
-                dia * mark_scale,
-            )
+            cross_cut_lines(cross_target, u, z_top_abs + z, dia * mark_scale)
         )
 
     # 縦断面: 主筋の水平線(上下端それぞれ 1 本)
@@ -253,7 +241,6 @@ def build_beam_commands(
         cut_lines.append(
             {
                 'target': length_target,
-                'class': CLASS_BEAM_MAIN,
                 'start': [u_min, z_top_abs + z],
                 'end': [u_max, z_top_abs + z],
             }
@@ -266,7 +253,6 @@ def build_beam_commands(
             cut_lines.append(
                 {
                     'target': length_target,
-                    'class': CLASS_BEAM_STIRRUP,
                     'start': [u, z_top_abs + z_stirrup_bottom],
                     'end': [u, z_top_abs + z_stirrup_top],
                 }

@@ -30,7 +30,6 @@ from ..document import (
     TARGET_FRONT_BACK,
     TARGET_LEFT_RIGHT,
 )
-from .classes import CLASS_SLAB_BOTTOM, CLASS_SLAB_SINGLE, CLASS_SLAB_TOP
 from .geometry import Point2D, Segment2D, clip_line_family, direction_vectors
 from .spec import BarPitch, SpecError
 
@@ -88,10 +87,9 @@ def _build_family(
     return _Family(spec, angle_deg, z, segments)
 
 
-def _plan_lines(class_name: str, family: _Family) -> List[PlanLineCommand]:
+def _plan_lines(family: _Family) -> List[PlanLineCommand]:
     return [
         {
-            'class': class_name,
             'start': [start[0], start[1]],
             'end': [end[0], end[1]],
         }
@@ -99,10 +97,9 @@ def _plan_lines(class_name: str, family: _Family) -> List[PlanLineCommand]:
     ]
 
 
-def _bars_3d(class_name: str, family: _Family) -> List[Bar3DCommand]:
+def _bars_3d(family: _Family) -> List[Bar3DCommand]:
     return [
         {
-            'class': class_name,
             'vertices': [
                 [start[0], start[1], family.z],
                 [end[0], end[1], family.z],
@@ -114,20 +111,18 @@ def _bars_3d(class_name: str, family: _Family) -> List[Bar3DCommand]:
 
 
 def cross_cut_lines(
-    target: str, class_name: str, u: float, v: float, size: float
+    target: str, u: float, v: float, size: float
 ) -> List[CutLineCommand]:
     """紙面直交方向の鉄筋を表す × 記号を 2 本の線に分解する。"""
     half = size / 2.0
     return [
         {
             'target': target,
-            'class': class_name,
             'start': [u - half, v - half],
             'end': [u + half, v + half],
         },
         {
             'target': target,
-            'class': class_name,
             'start': [u - half, v + half],
             'end': [u + half, v - half],
         },
@@ -135,7 +130,7 @@ def cross_cut_lines(
 
 
 def _family_cut_lines(
-    class_name: str, family: _Family, mark_scale: float
+    family: _Family, mark_scale: float
 ) -> List[CutLineCommand]:
     """1 方向の鉄筋群の断面表現を両方の断面コンポーネントへ組み立てる。"""
     commands: List[CutLineCommand] = []
@@ -157,7 +152,6 @@ def _family_cut_lines(
             commands.append(
                 {
                     'target': target,
-                    'class': class_name,
                     'start': [u_min, family.z],
                     'end': [u_max, family.z],
                 }
@@ -166,9 +160,7 @@ def _family_cut_lines(
             size = family.spec.diameter * mark_scale
             for start, end in family.segments:
                 u = (start[axis] + end[axis]) / 2.0
-                commands.extend(
-                    cross_cut_lines(target, class_name, u, family.z, size)
-                )
+                commands.extend(cross_cut_lines(target, u, family.z, size))
     return commands
 
 
@@ -204,7 +196,7 @@ def build_slab_commands(
     z_top_face = sum(float(vertex[2]) for vertex in path) / len(path)
     dist_angle = angle_deg + 90.0
 
-    families: List[Tuple[str, _Family]] = []
+    families: List[_Family] = []
     if double_layer:
         # 下端筋: 主筋が外側(下)、配力筋がその上に重なる
         z_bottom_main = z_top_face - thickness + cover + main.diameter / 2.0
@@ -214,22 +206,10 @@ def build_slab_commands(
         z_top_dist = z_top_main - top_main.diameter / 2.0 - top_dist.diameter / 2.0
         families.extend(
             [
-                (
-                    CLASS_SLAB_BOTTOM,
-                    _build_family(main, angle_deg, z_bottom_main, polygon),
-                ),
-                (
-                    CLASS_SLAB_BOTTOM,
-                    _build_family(dist, dist_angle, z_bottom_dist, polygon),
-                ),
-                (
-                    CLASS_SLAB_TOP,
-                    _build_family(top_main, angle_deg, z_top_main, polygon),
-                ),
-                (
-                    CLASS_SLAB_TOP,
-                    _build_family(top_dist, dist_angle, z_top_dist, polygon),
-                ),
+                _build_family(main, angle_deg, z_bottom_main, polygon),
+                _build_family(dist, dist_angle, z_bottom_dist, polygon),
+                _build_family(top_main, angle_deg, z_top_main, polygon),
+                _build_family(top_dist, dist_angle, z_top_dist, polygon),
             ]
         )
     else:
@@ -238,22 +218,16 @@ def build_slab_commands(
         z_dist = z_center + main.diameter / 2.0 + dist.diameter / 2.0
         families.extend(
             [
-                (
-                    CLASS_SLAB_SINGLE,
-                    _build_family(main, angle_deg, z_center, polygon),
-                ),
-                (
-                    CLASS_SLAB_SINGLE,
-                    _build_family(dist, dist_angle, z_dist, polygon),
-                ),
+                _build_family(main, angle_deg, z_center, polygon),
+                _build_family(dist, dist_angle, z_dist, polygon),
             ]
         )
 
     plan_lines: List[PlanLineCommand] = []
     cut_lines: List[CutLineCommand] = []
     bars_3d: List[Bar3DCommand] = []
-    for class_name, family in families:
-        plan_lines.extend(_plan_lines(class_name, family))
-        cut_lines.extend(_family_cut_lines(class_name, family, mark_scale))
-        bars_3d.extend(_bars_3d(class_name, family))
+    for family in families:
+        plan_lines.extend(_plan_lines(family))
+        cut_lines.extend(_family_cut_lines(family, mark_scale))
+        bars_3d.extend(_bars_3d(family))
     return plan_lines, cut_lines, bars_3d

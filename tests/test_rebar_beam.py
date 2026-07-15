@@ -1,9 +1,13 @@
-"""梁モード (rebar.beam / rebar.build_document) のテスト。vs モック不要。"""
+"""梁モード (rebar.beam / rebar.build_document) のテスト。vs モック不要。
+
+命令セットは作図クラスを持たないため、主筋とせん断補強筋の判別は
+幾何(向き・長さ・開閉)で行う。
+"""
 from __future__ import annotations
 
 import json
 import math
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 import pytest
 
@@ -13,10 +17,6 @@ from vectorworks_plugin_rebar.document import (
     validate_document,
 )
 from vectorworks_plugin_rebar.rebar import build_document
-from vectorworks_plugin_rebar.rebar.classes import (
-    CLASS_BEAM_MAIN,
-    CLASS_BEAM_STIRRUP,
-)
 from vectorworks_plugin_rebar.rebar.spec import SpecError
 
 
@@ -36,6 +36,20 @@ def make_params(**overrides: Any) -> Dict[str, Any]:
     return params
 
 
+def _is_diagonal(line: Mapping[str, Any]) -> bool:
+    """× 記号の片割れ(斜め線)かどうか。"""
+    return (
+        abs(line['end'][0] - line['start'][0]) > 1e-9
+        and abs(line['end'][1] - line['start'][1]) > 1e-9
+    )
+
+
+def _length(line: Mapping[str, Any]) -> float:
+    return math.hypot(
+        line['end'][0] - line['start'][0], line['end'][1] - line['start'][1]
+    )
+
+
 class TestBeamAlongX:
     def test_document_is_valid_and_serializable(self) -> None:
         document = build_document(make_params())
@@ -43,16 +57,18 @@ class TestBeamAlongX:
 
     def test_plan_lines(self) -> None:
         document = build_document(make_params())
+        # 主筋 = 軸方向 (X) の線 / せん断補強筋 = 軸直交 (Y) の線
         main = [
             line
             for line in document['plan_lines']
-            if line['class'] == CLASS_BEAM_MAIN
+            if line['start'][1] == line['end'][1]
         ]
         stirrups = [
             line
             for line in document['plan_lines']
-            if line['class'] == CLASS_BEAM_STIRRUP
+            if line['start'][0] == line['end'][0]
         ]
+        assert len(main) + len(stirrups) == len(document['plan_lines'])
         # 主筋: 上端 ±92 と下端 ±92, 0 のうち平面位置の重複を除いた 3 本
         assert len(main) == 3
         offsets = sorted(line['start'][1] for line in main)
@@ -65,21 +81,11 @@ class TestBeamAlongX:
 
     def test_bars_3d(self) -> None:
         document = build_document(make_params())
-        main = [
-            bar
-            for bar in document['bars_3d']
-            if bar['class'] == CLASS_BEAM_MAIN
-        ]
-        stirrups = [
-            bar
-            for bar in document['bars_3d']
-            if bar['class'] == CLASS_BEAM_STIRRUP
-        ]
+        main = [bar for bar in document['bars_3d'] if not bar['closed']]
+        stirrups = [bar for bar in document['bars_3d'] if bar['closed']]
         # 主筋は上端 2 + 下端 3 の実本数、せん断補強筋は閉じた矩形
         assert len(main) == 5
-        assert all(not bar['closed'] for bar in main)
         assert len(stirrups) == 20
-        assert all(bar['closed'] for bar in stirrups)
         # 上端筋 z = -40-10-8 = -58 / 下端筋 z = -600+40+10+8 = -542
         z_values = {round(bar['vertices'][0][2], 6) for bar in main}
         assert z_values == {-58.0, -542.0}
@@ -91,9 +97,9 @@ class TestBeamAlongX:
             for line in document['cut_lines']
             if line['target'] == TARGET_LEFT_RIGHT
         ]
-        rect = [line for line in lines if line['class'] == CLASS_BEAM_STIRRUP]
-        crosses = [line for line in lines if line['class'] == CLASS_BEAM_MAIN]
-        # せん断補強筋の矩形 4 線 + 主筋 5 本の × (各 2 線)
+        # せん断補強筋の矩形 = 軸平行の 4 線 / 主筋の × = 斜め線
+        rect = [line for line in lines if not _is_diagonal(line)]
+        crosses = [line for line in lines if _is_diagonal(line)]
         assert len(rect) == 4
         assert len(crosses) == 10
         # 矩形はかぶりを除いた外形 (±110, -40〜-560)
@@ -124,9 +130,12 @@ class TestBeamAlongX:
             for line in document['cut_lines']
             if line['target'] == TARGET_FRONT_BACK
         ]
-        main = [line for line in lines if line['class'] == CLASS_BEAM_MAIN]
+        # 主筋 = 水平線 / せん断補強筋 = 縦線
+        main = [
+            line for line in lines if line['start'][1] == line['end'][1]
+        ]
         stirrups = [
-            line for line in lines if line['class'] == CLASS_BEAM_STIRRUP
+            line for line in lines if line['start'][0] == line['end'][0]
         ]
         # 主筋: 上端・下端の水平線 2 本 (全長)
         assert len(main) == 2
@@ -137,7 +146,6 @@ class TestBeamAlongX:
         # せん断補強筋: @200 の縦線 20 本
         assert len(stirrups) == 20
         for line in stirrups:
-            assert line['start'][0] == line['end'][0]
             assert {line['start'][1], line['end'][1]} == {-40.0, -560.0}
 
 
@@ -146,14 +154,15 @@ class TestBeamAlongY:
         document = build_document(
             make_params(path=[[0.0, 0.0, 0.0], [0.0, 4000.0, 0.0]])
         )
-        cross = [
+        # Y 方向の梁では横断面 (せん断補強筋の矩形 = 軸平行 4 線) が
+        # 前後の断面に入る
+        front_back = [
             line
             for line in document['cut_lines']
-            if line['class'] == CLASS_BEAM_STIRRUP
-            and line['target'] == TARGET_FRONT_BACK
+            if line['target'] == TARGET_FRONT_BACK
         ]
-        # Y 方向の梁では横断面 (せん断補強筋の矩形) が前後の断面に入る
-        assert len(cross) == 4
+        rect = [line for line in front_back if not _is_diagonal(line)]
+        assert len(rect) == 4
 
 
 class TestBeamVariants:
@@ -164,22 +173,20 @@ class TestBeamVariants:
         stirrups = [
             line
             for line in document['plan_lines']
-            if line['class'] == CLASS_BEAM_STIRRUP
+            if line['start'][0] == line['end'][0]
         ]
         assert len(stirrups) == 1
         assert math.isclose(stirrups[0]['start'][0], 75.0)
 
     def test_without_stirrup(self) -> None:
         document = build_document(make_params(stirrup=''))
+        # 軸直交のせん断補強筋線が無い
         assert not any(
-            line['class'] == CLASS_BEAM_STIRRUP
+            line['start'][0] == line['end'][0]
             for line in document['plan_lines']
         )
         # 主筋の × は残る
-        assert any(
-            line['class'] == CLASS_BEAM_MAIN
-            for line in document['cut_lines']
-        )
+        assert any(_is_diagonal(line) for line in document['cut_lines'])
 
     def test_single_bar_is_centered(self) -> None:
         document = build_document(
@@ -188,8 +195,7 @@ class TestBeamVariants:
         crosses = [
             line
             for line in document['cut_lines']
-            if line['target'] == TARGET_LEFT_RIGHT
-            and line['class'] == CLASS_BEAM_MAIN
+            if line['target'] == TARGET_LEFT_RIGHT and _is_diagonal(line)
         ]
         assert len(crosses) == 2
         center_u = round((crosses[0]['start'][0] + crosses[0]['end'][0]) / 2, 6)
@@ -205,11 +211,10 @@ class TestBeamVariants:
                 ]
             )
         )
-        # 各区間に主筋の平面線が引かれる (3 本 × 2 区間)
+        # 各区間に主筋の平面線が引かれる (3 本 × 2 区間)。主筋は区間の
+        # 全長 (2000mm 以上)、せん断補強筋は幅方向 (220mm) の短線
         main = [
-            line
-            for line in document['plan_lines']
-            if line['class'] == CLASS_BEAM_MAIN
+            line for line in document['plan_lines'] if _length(line) > 1000.0
         ]
         assert len(main) == 6
 

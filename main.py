@@ -1,14 +1,14 @@
 """VectorWorks に登録するプラグインオブジェクト(PIO)のラッパースクリプト。
 
-GitHub の main ブランチの最新コミットを確認し、インストール済みの
-コミットと異なれば VectorWorks 設定フォルダ内の Python Externals
-フォルダへ更新インストールしてから、プラグイン本体(``run()``)を実行する。
+実行(PIO のリセット)のたびに GitHub の main ブランチの最新コミットを
+確認し、インストール済みのコミットと異なれば VectorWorks 設定フォルダ内の
+Python Externals フォルダへ更新インストールしてから、プラグイン本体
+(``run()``)を実行する。更新した場合はキャッシュ済みモジュールを破棄する
+ため、VectorWorks を再起動しなくても次のリセットから新しいコードが使われる。
 
-PIO のリセットスクリプトは図形の移動・編集のたびに実行されるため、
-メニューコマンド型の homeskz と異なり、**更新確認は VectorWorks
-セッション内で本体パッケージを最初に読み込むときの 1 回だけ**行う
-(毎リセットのネットワークアクセスは編集操作を著しく遅くする)。
-更新は VectorWorks を再起動した後の最初のリセットで反映される。
+開発初期は頻繁に変更して試すため毎リセットで更新を確認する。リセットは
+図形の移動・編集のたびに実行されるため、将来は更新確認を VectorWorks
+セッション内の初回だけに絞る予定(CLAUDE.md のロードマップ参照)。
 
 本体パッケージは純 Python のためアーカイブの直接展開でインストールし
 (VectorWorks 同梱の Python では pip を実行できない場合があるため pip に
@@ -587,16 +587,11 @@ def _alert(message: str) -> None:
 
 
 def _main() -> None:
-    # PIO のリセットは頻繁に実行されるため、更新確認 (ネットワーク
-    # アクセス) は本体パッケージがまだ import されていないとき (=
-    # VectorWorks セッション内の初回) だけ行う。以降のリセットは
-    # キャッシュ済みのモジュールをそのまま使う
-    if MODULE_NAME not in sys.modules:
-        try:
-            _upgrade_if_available()
-        except Exception:
-            # 更新の失敗がプラグイン本体の実行を妨げてはならない
-            pass
+    try:
+        _upgrade_if_available()
+    except Exception:
+        # 更新の失敗がプラグイン本体の実行を妨げてはならない
+        pass
     try:
         module = importlib.import_module(MODULE_NAME)
     except Exception:

@@ -23,6 +23,7 @@ def _make_vs_mock(
     )
     vs_mock.LNewObj.return_value = 'OBJ'
     vs_mock.Set2DComponentGroup.return_value = True
+    vs_mock.GetClass.return_value = 'PIOクラス'
     return vs_mock
 
 
