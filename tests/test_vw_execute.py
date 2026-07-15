@@ -109,6 +109,21 @@ class TestExecuteDocument:
         assert vs_mock.OpenPoly.called
         assert vs_mock.ClosePoly.called
 
+    def test_plan_lines_assigned_to_top_plan_component(self) -> None:
+        vs_mock = _make_vs_mock()
+        vw = _load(vs_mock)
+
+        vw.execute_document(make_document(), PIO_HANDLE)
+
+        calls = vs_mock.Set2DComponentGroup.call_args_list
+        by_component = {c.args[2]: c.args for c in calls}
+        # 平面線は Top/Plan コンポーネント (10) にグループとして設定する。
+        # これにより断面コンポーネント (6/9) が平面ビューに漏れない。
+        assert 10 in by_component
+        top_plan = by_component[10]
+        assert top_plan[0] == PIO_HANDLE
+        assert top_plan[1].startswith('OBJ_')
+
     def test_cut_lines_assigned_to_component(self) -> None:
         vs_mock = _make_vs_mock()
         vw = _load(vs_mock)
@@ -118,15 +133,15 @@ class TestExecuteDocument:
         calls = vs_mock.Set2DComponentGroup.call_args_list
         # front_back には作ったグループを、空の left_right には NULL を設定する
         by_component = {c.args[2]: c.args for c in calls}
-        assert set(by_component) == {6, 9}
+        assert set(by_component) == {6, 9, 10}
         front_back = by_component[6]
         assert front_back[0] == PIO_HANDLE
         assert front_back[1].startswith('OBJ_')
         left_right = by_component[9]
         assert left_right[1] is vs_mock.Handle.return_value
-        # グループ化してから設定する
-        assert vs_mock.BeginGroup.call_count == 1
-        assert vs_mock.EndGroup.call_count == 1
+        # 平面線グループ + 断面線グループの 2 グループを作る
+        assert vs_mock.BeginGroup.call_count == 2
+        assert vs_mock.EndGroup.call_count == 2
 
     def test_component_failure_deletes_group(self) -> None:
         vs_mock = _make_vs_mock()

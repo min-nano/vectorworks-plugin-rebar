@@ -13,6 +13,12 @@ Table - 2D components に基づく):
 - ``front_back`` → 前後の断面 (6)。紙面 u=ローカル X・v=ローカル Z。
 - ``left_right`` → 左右の断面 (9)。紙面 u=ローカル Y・v=ローカル Z。
 
+平面線は Top/Plan コンポーネント (10) として明示的に設定する。断面
+コンポーネント (6/9) のグループも PIO の 2D プロファイルの一部として
+残るため、Top/Plan を明示定義しないと断面表現が平面ビューにも漏れて
+表示されてしまう。Top/Plan を平面線グループに固定することで、平面
+ビューには平面線だけ、断面ビューポートには断面線だけが表示される。
+
 紙面座標の符号(左右ビューの鏡像の扱い)は VectorWorks 上で最終確認する
 (描画フェーズは VW 上で検証する方針)。
 """
@@ -25,6 +31,7 @@ import vs
 from ..document import TARGET_FRONT_BACK, TARGET_LEFT_RIGHT
 
 # Set2DComponentGroup の component 定数 (VW 2019+)
+COMPONENT_TOP_PLAN = 10
 COMPONENT_FRONT_BACK_CUT = 6
 COMPONENT_LEFT_RIGHT_CUT = 9
 
