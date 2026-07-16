@@ -37,7 +37,9 @@ from ..document import (
 from .component import (
     COMPONENT_TOP_PLAN,
     TARGET_COMPONENTS,
+    component_set_succeeded,
     set_component_group,
+    set_top_plan_view_component,
 )
 from .draw import draw_line_2d, draw_poly_3d
 
@@ -55,7 +57,7 @@ def _pio_class(pio_handle: Any) -> str:
 
 def _execute_plan_lines(
     pio_handle: Any, commands: List[PlanLineCommand], class_name: str
-) -> int:
+) -> tuple[int, Any]:
     """plan_lines を Top/Plan コンポーネント(10)のグループとして設定する。
 
     Top/Plan を平面線グループに明示定義することで、断面コンポーネント
@@ -66,23 +68,28 @@ def _execute_plan_lines(
     コンポーネントの仕組みが無く、作ったグループがそのまま平面ビューの
     2D 表現になるためグループは削除しない(断面線側はこの環境では削除
     されるため、平面ビューには平面線だけが残る)。
+
+    戻り値は (本数, Set2DComponentGroup の生の戻り値)。
     """
     if not commands:
-        set_component_group(pio_handle, None, COMPONENT_TOP_PLAN)
-        return 0
+        result = set_component_group(pio_handle, None, COMPONENT_TOP_PLAN)
+        return 0, result
     vs.BeginGroup()
     for command in commands:
         draw_line_2d(command['start'], command['end'], class_name)
     vs.EndGroup()
     group = vs.LNewObj()
-    set_component_group(pio_handle, group, COMPONENT_TOP_PLAN)
-    return len(commands)
+    result = set_component_group(pio_handle, group, COMPONENT_TOP_PLAN)
+    return len(commands), result
 
 
 def _execute_cut_lines(
     pio_handle: Any, commands: List[CutLineCommand], class_name: str
-) -> int:
-    """cut_lines を target ごとの 2D コンポーネントグループとして設定する。"""
+) -> tuple[int, Dict[str, Any]]:
+    """cut_lines を target ごとの 2D コンポーネントグループとして設定する。
+
+    戻り値は (本数, {target: Set2DComponentGroup の生の戻り値})。
+    """
     by_target: Dict[str, List[CutLineCommand]] = {
         target: [] for target in CUT_TARGETS
     }
@@ -90,39 +97,59 @@ def _execute_cut_lines(
         by_target[command['target']].append(command)
 
     count = 0
+    results: Dict[str, Any] = {}
     for target, component in TARGET_COMPONENTS.items():
         lines = by_target[target]
         if not lines:
             # 前回リセットの断面表現が残らないよう空のコンポーネントは削除する
-            set_component_group(pio_handle, None, component)
+            results[target] = set_component_group(pio_handle, None, component)
             continue
         vs.BeginGroup()
         for line in lines:
             draw_line_2d(line['start'], line['end'], class_name)
         vs.EndGroup()
         group = vs.LNewObj()
-        if set_component_group(pio_handle, group, component):
+        result = set_component_group(pio_handle, group, component)
+        results[target] = result
+        if component_set_succeeded(result):
             count += len(lines)
         else:
-            # 2D コンポーネントが使えない環境(VW 2018 以前)では平面
-            # ビューにグループが残るため削除する
+            # 断面コンポーネントへ移動できなかった場合は、そのグループが
+            # 平面ビュー(PIO 本体の 2D プロファイル)に残って断面表現が
+            # 漏れるため削除する(VW 2018 以前や割り当て失敗時)。
             vs.DelObject(group)
-    return count
+    return count, results
 
 
-def execute_document(document: Any, pio_handle: Any) -> Dict[str, int]:
-    """命令セットを検証してから描画し、実行数を返す。"""
+def execute_document(document: Any, pio_handle: Any) -> Dict[str, Any]:
+    """命令セットを検証してから描画し、実行数と診断情報を返す。
+
+    診断情報 ``diagnostic`` には各 2D コンポーネント割り当ての生の戻り値を
+    含める(平面ビューへの漏れを VW 上で切り分けるため、``run()`` が
+    ステータスバーに表示する)。
+    """
     validated = validate_document(document)
     class_name = _pio_class(pio_handle)
 
-    counts = {'plan_lines': 0, 'cut_lines': 0, 'bars_3d': 0}
+    bars = 0
     for bar in validated['bars_3d']:
         draw_poly_3d(bar['vertices'], bar['closed'], class_name)
-        counts['bars_3d'] += 1
-    counts['plan_lines'] = _execute_plan_lines(
+        bars += 1
+    plan_count, plan_result = _execute_plan_lines(
         pio_handle, validated['plan_lines'], class_name
     )
-    counts['cut_lines'] = _execute_cut_lines(
+    # Top/Plan ビューが断面コンポーネントを表示しないよう Top に固定する
+    top_view_result = set_top_plan_view_component(pio_handle)
+    cut_count, cut_results = _execute_cut_lines(
         pio_handle, validated['cut_lines'], class_name
     )
-    return counts
+    return {
+        'plan_lines': plan_count,
+        'cut_lines': cut_count,
+        'bars_3d': bars,
+        'diagnostic': {
+            'top_plan': plan_result,
+            'top_plan_view': top_view_result,
+            'cut': cut_results,
+        },
+    }
