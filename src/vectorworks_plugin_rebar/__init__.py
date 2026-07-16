@@ -75,7 +75,7 @@ def _diagnostic_message(result: dict) -> str:
     return (
         f"配筋: 平面{result.get('plan_lines', 0)} "
         f"断面{result.get('cut_lines', 0)} 3D{result.get('bars_3d', 0)} | "
-        f"2Dcomp TP={diag.get('top_plan')!r} "
+        f"profile={diag.get('profile')!r} "
         f"FB={cut.get('front_back')!r} LR={cut.get('left_right')!r} "
         f"topview={diag.get('top_plan_view')!r}"
     )

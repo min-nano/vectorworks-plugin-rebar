@@ -113,8 +113,12 @@ class TestExecuteDocument:
         # 平面線 2 + 断面線 1 = 3 本の MoveTo/LineTo
         assert vs_mock.MoveTo.call_count == 3
         assert vs_mock.LineTo.call_count == 3
-        assert vs_mock.MoveTo.call_args_list[0].args[0] == (0.0, 0.0)
-        assert vs_mock.LineTo.call_args_list[0].args[0] == (100.0, 0.0)
+        # 描画順は断面線 → 平面線(プロファイル固定を最後にするため)。
+        # 平面線 (0,0)->(100,0) が描かれていることを確認する。
+        starts = {c.args[0] for c in vs_mock.MoveTo.call_args_list}
+        ends = {c.args[0] for c in vs_mock.LineTo.call_args_list}
+        assert (0.0, 0.0) in starts
+        assert (100.0, 0.0) in ends
         # すべての図形を PIO 本体の描画クラスに割り当て、属性を by-class にする
         vs_mock.GetClass.assert_called_once_with(PIO_HANDLE)
         class_names = {c.args[1] for c in vs_mock.SetClass.call_args_list}
@@ -147,20 +151,18 @@ class TestExecuteDocument:
         for call in vs_mock.SetPlanarRef.call_args_list:
             assert call.args[1] == 0
 
-    def test_plan_lines_assigned_to_top_plan_component(self) -> None:
+    def test_plan_lines_set_as_profile_group(self) -> None:
         vs_mock = _make_vs_mock()
         vw = _load(vs_mock)
 
         vw.execute_document(make_document(), PIO_HANDLE)
 
-        calls = vs_mock.Set2DComponentGroup.call_args_list
-        by_component = {c.args[2]: c.args for c in calls}
-        # 平面線は Top/Plan コンポーネント (10) にグループとして設定する。
-        # これにより断面コンポーネント (6/9) が平面ビューに漏れない。
-        assert 10 in by_component
-        top_plan = by_component[10]
-        assert top_plan[0] == PIO_HANDLE
-        assert top_plan[1].startswith('OBJ_')
+        # 平面線はパスオブジェクトの 2D プロファイルに固定する。
+        # これにより平面ビューには平面線だけが表示され、断面線は漏れない。
+        vs_mock.SetCustomObjectProfileGroup.assert_called_once()
+        profile_call = vs_mock.SetCustomObjectProfileGroup.call_args_list[0]
+        assert profile_call.args[0] == PIO_HANDLE
+        assert profile_call.args[1].startswith('OBJ_')
 
     def test_cut_lines_assigned_to_component(self) -> None:
         vs_mock = _make_vs_mock()
@@ -170,8 +172,9 @@ class TestExecuteDocument:
 
         calls = vs_mock.Set2DComponentGroup.call_args_list
         # front_back には作ったグループを、空の left_right には NULL を設定する
+        # (平面線はコンポーネントではなくプロファイルに固定するため 10 は無い)
         by_component = {c.args[2]: c.args for c in calls}
-        assert set(by_component) == {6, 9, 10}
+        assert set(by_component) == {6, 9}
         front_back = by_component[6]
         assert front_back[0] == PIO_HANDLE
         assert front_back[1].startswith('OBJ_')

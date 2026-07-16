@@ -35,10 +35,10 @@ from ..document import (
     validate_document,
 )
 from .component import (
-    COMPONENT_TOP_PLAN,
     TARGET_COMPONENTS,
     component_set_succeeded,
     set_component_group,
+    set_custom_object_profile_group,
     set_top_plan_view_component,
 )
 from .draw import draw_line_2d, draw_poly_3d
@@ -58,28 +58,24 @@ def _pio_class(pio_handle: Any) -> str:
 def _execute_plan_lines(
     pio_handle: Any, commands: List[PlanLineCommand], class_name: str
 ) -> tuple[int, Any]:
-    """plan_lines を Top/Plan コンポーネント(10)のグループとして設定する。
+    """plan_lines をパスオブジェクトの 2D プロファイルに固定する。
 
-    Top/Plan を平面線グループに明示定義することで、断面コンポーネント
-    (6/9)のグループが平面ビューに漏れて表示されるのを防ぐ。命令が無い
-    場合は NULL を設定して前回リセットの残骸を消す。
+    リセットで描いた全図形が既定で PIO のプロファイル(= 平面ビューに出る
+    2D)になるため、断面線もそのまま平面ビューに漏れる。プロファイルを
+    平面線グループに ``SetCustomObjectProfileGroup`` で固定することで、
+    平面ビューには平面線だけを表示する。命令が無い場合は NULL を渡す。
 
-    ``Set2DComponentGroup`` が使えない環境(VW 2018 以前)では 2D
-    コンポーネントの仕組みが無く、作ったグループがそのまま平面ビューの
-    2D 表現になるためグループは削除しない(断面線側はこの環境では削除
-    されるため、平面ビューには平面線だけが残る)。
-
-    戻り値は (本数, Set2DComponentGroup の生の戻り値)。
+    戻り値は (本数, SetCustomObjectProfileGroup の生の戻り値)。
     """
     if not commands:
-        result = set_component_group(pio_handle, None, COMPONENT_TOP_PLAN)
+        result = set_custom_object_profile_group(pio_handle, None)
         return 0, result
     vs.BeginGroup()
     for command in commands:
         draw_line_2d(command['start'], command['end'], class_name)
     vs.EndGroup()
     group = vs.LNewObj()
-    result = set_component_group(pio_handle, group, COMPONENT_TOP_PLAN)
+    result = set_custom_object_profile_group(pio_handle, group)
     return len(commands), result
 
 
@@ -135,20 +131,23 @@ def execute_document(document: Any, pio_handle: Any) -> Dict[str, Any]:
     for bar in validated['bars_3d']:
         draw_poly_3d(bar['vertices'], bar['closed'], class_name)
         bars += 1
-    plan_count, plan_result = _execute_plan_lines(
+    # 断面コンポーネントを先に割り当ててから、プロファイルを平面線グループに
+    # 固定する(プロファイル固定を最後にして平面ビューに平面線だけが残るよう
+    # にする)。
+    cut_count, cut_results = _execute_cut_lines(
+        pio_handle, validated['cut_lines'], class_name
+    )
+    plan_count, profile_result = _execute_plan_lines(
         pio_handle, validated['plan_lines'], class_name
     )
     # Top/Plan ビューが断面コンポーネントを表示しないよう Top に固定する
     top_view_result = set_top_plan_view_component(pio_handle)
-    cut_count, cut_results = _execute_cut_lines(
-        pio_handle, validated['cut_lines'], class_name
-    )
     return {
         'plan_lines': plan_count,
         'cut_lines': cut_count,
         'bars_3d': bars,
         'diagnostic': {
-            'top_plan': plan_result,
+            'profile': profile_result,
             'top_plan_view': top_view_result,
             'cut': cut_results,
         },
