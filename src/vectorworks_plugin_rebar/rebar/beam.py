@@ -13,17 +13,16 @@
 平面ビューは主筋を軸方向の線(上下端で平面位置が重なる線は 1 本に
 まとめる)、せん断補強筋を軸直交の短線(足の内法幅)で描く。
 
-断面 2D コンポーネントは区間ごとに**横断面のみ**を実位置へ生成する:
-区間が X 軸寄りなら横断面(主筋=×・せん断補強筋=矩形)を左右の断面
-(left_right)に、Y 軸寄りなら前後の断面(front_back)に置く。区間ごとに
-生成することで、折れ線・矩形パスでも各区間を切断した位置に断面が
-表示される。斜めの区間は近い側の軸に寄せた近似になる(2D コンポーネント
-は物体のローカル軸 6 方向にしか持てないため)。
-
-縦断面(軸方向に走る梁の立面)は生成しない。2D コンポーネントは切断
-位置に応じた条件表示ができず常に表示されるため、切断面が通らない
-「紙面に平行な梁」の配筋まで断面ビューポートに出てしまう。横断面だけに
-絞ることで、実際に切断された区間の断面だけを表示する。
+断面 2D コンポーネントは区間ごとに実位置へ生成する: 区間が X 軸寄り
+なら横断面(梁を横断する切断: 主筋=×・せん断補強筋=矩形)を左右の断面
+(left_right)に、縦断面(梁に沿う切断の側面図: 主筋=水平線・せん断補強筋
+=等ピッチの縦線)を前後の断面(front_back)に置く。Y 軸寄りなら逆。VW の
+断面ビューポートは 3D の切断面と物体の交差から表示コンポーネントを
+決めるため、横断/縦断を実位置に用意することで、梁を横断した切断には
+横断面、梁に沿った切断(梁幅内)には側面図が表示される。折れ線・矩形
+パスでも各区間を切断した位置に断面が出る。斜めの区間は近い側の軸に
+寄せた近似になる(2D コンポーネントは物体のローカル軸 6 方向にしか
+持てないため)。
 """
 from __future__ import annotations
 
@@ -102,24 +101,23 @@ def _segment_cut_lines(
     z_stirrup_bottom: float,
     mark_scale: float,
 ) -> List[CutLineCommand]:
-    """1 区間の断面 2D コンポーネント(横断面のみ)を組み立てる。
+    """1 区間の断面 2D コンポーネント(横断面・縦断面)を組み立てる。
 
-    区間が X 軸寄りなら横断面(主筋=×・せん断補強筋=矩形)を左右の断面
-    (left_right)に、Y 軸寄りなら前後の断面(front_back)に置く。区間ごとに
-    実位置へ生成することで、折れ線・矩形パスでも各区間を切断した位置に
-    断面が出る。斜めの区間は近い側の軸に寄せた近似になる。
-
-    縦断面(軸方向に走る梁の立面=主筋の水平線・あばら筋の縦線)は生成
-    しない。2D コンポーネントは切断位置に応じた条件表示ができず、常に
-    表示されるため、切断面が通らない「紙面に平行な梁」の配筋まで断面
-    ビューポートに出てしまう。横断面(=梁を横断する切断)だけに絞ることで、
-    実際に切断された区間の断面だけを表示する。
+    区間ごとに実位置へ生成する。区間が X 軸寄りなら横断面(梁を横断する
+    切断: 主筋=×・せん断補強筋=矩形)を左右の断面(left_right)に、縦断面
+    (梁に沿う切断の側面図: 主筋=水平線・せん断補強筋=等ピッチの縦線)を
+    前後の断面(front_back)に置く。Y 軸寄りなら逆。VW の断面ビューポートは
+    3D の切断面と物体の交差から表示コンポーネントを決めるため、横断/縦断を
+    実位置に用意することで、梁を横断した切断には横断面、梁に沿った切断
+    (梁幅内)には側面図が表示される。斜めの区間は近い側の軸に寄せた近似。
     """
     commands: List[CutLineCommand] = []
     x_dominant = abs(segment.axis[0]) >= abs(segment.axis[1])
     cross_target = TARGET_LEFT_RIGHT if x_dominant else TARGET_FRONT_BACK
-    # 横断面の紙面 u 軸 = 軸と直交する平面軸
+    length_target = TARGET_FRONT_BACK if x_dominant else TARGET_LEFT_RIGHT
+    # 横断面の紙面 u 軸 = 軸と直交する平面軸 / 縦断面の紙面 u 軸 = 軸方向の平面軸
     cross_axis = 1 if x_dominant else 0
+    length_axis = 0 if x_dominant else 1
     mid = segment.point_at(segment.length / 2.0, 0.0)
     center_u = mid[cross_axis]
     lateral_sign = segment.lateral[cross_axis]
@@ -150,6 +148,36 @@ def _segment_cut_lines(
         commands.extend(
             cross_cut_lines(cross_target, u, z_top_abs + z, dia * mark_scale)
         )
+
+    # 縦断面(側面図): 主筋の水平線(上下端それぞれ 1 本、区間の全長)
+    a1 = segment.start[length_axis]
+    a2 = segment.end[length_axis]
+    u_min, u_max = min(a1, a2), max(a1, a2)
+    seen_z = set()
+    for _offset, z, _dia in main_bars:
+        key = round(z, _OFFSET_ROUND)
+        if key in seen_z:
+            continue
+        seen_z.add(key)
+        commands.append(
+            {
+                'target': length_target,
+                'start': [u_min, z_top_abs + z],
+                'end': [u_max, z_top_abs + z],
+            }
+        )
+    # 縦断面(側面図): せん断補強筋の縦線(等ピッチ)
+    if stirrup is not None:
+        axis_sign = segment.axis[length_axis]
+        for along in _stirrup_positions(segment.length, stirrup.pitch):
+            u = segment.start[length_axis] + along * axis_sign
+            commands.append(
+                {
+                    'target': length_target,
+                    'start': [u, z_top_abs + z_stirrup_bottom],
+                    'end': [u, z_top_abs + z_stirrup_top],
+                }
+            )
     return commands
 
 
