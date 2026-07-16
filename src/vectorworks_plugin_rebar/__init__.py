@@ -51,35 +51,8 @@ def run() -> None:
         document = json.loads(json.dumps(build_document(params)))
 
         # フェーズ2: 命令セットに従って描画
-        result = execute_document(document, pio_handle)
-
-        # 断面 2D コンポーネントが平面ビューに漏れる問題の切り分け用診断を
-        # ステータスバーに表示する(2D コンポーネント割り当ての生の戻り値)。
-        # 問題解決後に削除する一時的な出力。
-        vs.Message(_diagnostic_message(result))
+        execute_document(document, pio_handle)
     except SpecError as error:
         vs.Message(f'配筋: {error}')
     except Exception as error:
         vs.Message(f'配筋: エラーが発生しました: {error}')
-
-
-def _diagnostic_message(result: dict) -> str:
-    """描画結果の診断メッセージを組み立てる(2D コンポーネント切り分け用)。
-
-    各 2D コンポーネント割り当て(``Set2DComponentGroup`` /
-    ``SetTopPlan2DComp``)の生の戻り値をそのまま表示し、VectorWorks 上で
-    どのコンポーネントが成功/失敗しているかを確認できるようにする。
-    """
-    diag = result.get('diagnostic', {})
-    cut = diag.get('cut', {})
-
-    def fmt(target: str) -> str:
-        entry = cut.get(target) or {}
-        return f"set={entry.get('set')!r},kept={entry.get('kept')!r}"
-
-    return (
-        f"配筋: 平面{result.get('plan_lines', 0)} "
-        f"断面{result.get('cut_lines', 0)} 3D{result.get('bars_3d', 0)} | "
-        f"FB[{fmt('front_back')}] LR[{fmt('left_right')}] "
-        f"topview={diag.get('top_plan_view')!r}"
-    )

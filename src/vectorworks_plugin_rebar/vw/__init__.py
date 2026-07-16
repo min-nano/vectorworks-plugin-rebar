@@ -11,16 +11,15 @@
 
 1. 3D 鉄筋(bars_3d) — 3D ビュー用の 3D ポリゴン。平面+3D の両方を
    持つことで PIO はハイブリッドオブジェクトになる。
-2. 平面線(plan_lines) — グループへまとめ、Top/Plan コンポーネント
-   (10)に設定する。断面コンポーネントのグループも PIO の 2D
-   プロファイルに残るため、Top/Plan を明示定義しないと断面線が平面
-   ビューにも漏れて表示される。Top/Plan を平面線グループに固定する
-   ことで平面ビューには平面線だけが表示される。
+2. 平面線(plan_lines) — 通常の 2D 図形(regen)として描く。デザイン
+   レイヤの平面ビューは regen をそのまま表示するため、平面線は普通に
+   描けば平面ビューに出る。
 3. 断面線(cut_lines) — target ごとにグループへまとめ、PIO の 2D
-   コンポーネント(前後の断面=6・左右の断面=9)に設定する。命令が無い
-   target は NULL を設定して前回リセットの残骸を消す。
-   ``Set2DComponentGroup`` が使えない環境では作ったグループを削除して
-   平面ビューを汚さない。
+   コンポーネント(前後の断面=6・左右の断面=9)に設定した後、元グループを
+   ``vs.DelObject`` で regen から削除する。``Set2DComponentGroup`` は
+   コンポーネント側へジオメトリをコピーするため、regen の元グループを
+   消しても断面ビューポートには断面が残り、平面ビューには漏れない。
+   命令が無い target は NULL を設定して前回リセットの残骸を消す。
 """
 from __future__ import annotations
 
@@ -37,8 +36,6 @@ from ..document import (
 from .component import (
     TARGET_COMPONENTS,
     component_set_succeeded,
-    get_component_group,
-    handle_is_valid,
     set_component_group,
     set_top_plan_view_component,
 )
@@ -72,21 +69,17 @@ def _execute_plan_lines(
 
 def _execute_cut_lines(
     pio_handle: Any, commands: List[CutLineCommand], class_name: str
-) -> tuple[int, Dict[str, Any]]:
+) -> int:
     """cut_lines を 2D コンポーネントに割り当て、regen からは取り除く。
 
     デザインレイヤの平面ビューは regen(リセットで描いた全図形)をそのまま
     表示するため、``Set2DComponentGroup`` で成功(True)を返しても断面線は
     regen に残り平面ビューに漏れる。そこで割り当て後に元グループを
-    ``vs.DelObject`` で regen から削除する。``Set2DComponentGroup`` が
-    コンポーネント側へジオメトリをコピーしていれば、regen の元グループを
-    消しても断面ビューポートには断面が残る。
+    ``vs.DelObject`` で regen から削除する。``Set2DComponentGroup`` は
+    コンポーネント側へジオメトリをコピーするため、regen の元グループを
+    消しても断面ビューポートには断面が残る(VW 上で確認済み)。
 
-    削除後に ``Get2DComponentGroup`` でコンポーネントが残っているか(コピー
-    か参照か)を確認し、診断情報として返す。
-
-    戻り値は (本数, {target: {'set':戻り値, 'kept':削除後もコンポーネントが
-    残るか}})。
+    命令が無い target は NULL を設定して前回リセットの残骸を消す。
     """
     by_target: Dict[str, List[CutLineCommand]] = {
         target: [] for target in CUT_TARGETS
@@ -95,58 +88,42 @@ def _execute_cut_lines(
         by_target[command['target']].append(command)
 
     count = 0
-    results: Dict[str, Any] = {}
     for target, component in TARGET_COMPONENTS.items():
         lines = by_target[target]
         if not lines:
             # 前回リセットの断面表現が残らないよう空のコンポーネントは削除する
-            set_result = set_component_group(pio_handle, None, component)
-            results[target] = {'set': set_result, 'kept': None}
+            set_component_group(pio_handle, None, component)
             continue
         vs.BeginGroup()
         for line in lines:
             draw_line_2d(line['start'], line['end'], class_name)
         vs.EndGroup()
         group = vs.LNewObj()
-        set_result = set_component_group(pio_handle, group, component)
-        if component_set_succeeded(set_result):
+        if component_set_succeeded(
+            set_component_group(pio_handle, group, component)
+        ):
             count += len(lines)
-        # 断面線を regen(平面ビュー)から取り除く。コンポーネントへコピー
-        # されていれば断面ビューポートには残る。
+        # 断面線を regen(平面ビュー)から取り除く。コンポーネント側には
+        # コピーが残るため断面ビューポートには断面が表示される。
         vs.DelObject(group)
-        kept = handle_is_valid(get_component_group(pio_handle, component))
-        results[target] = {'set': set_result, 'kept': kept}
-    return count, results
+    return count
 
 
-def execute_document(document: Any, pio_handle: Any) -> Dict[str, Any]:
-    """命令セットを検証してから描画し、実行数と診断情報を返す。
-
-    診断情報 ``diagnostic`` には各 2D コンポーネント割り当ての生の戻り値を
-    含める(平面ビューへの漏れを VW 上で切り分けるため、``run()`` が
-    ステータスバーに表示する)。
-    """
+def execute_document(document: Any, pio_handle: Any) -> Dict[str, int]:
+    """命令セットを検証してから描画し、実行数を返す。"""
     validated = validate_document(document)
     class_name = _pio_class(pio_handle)
 
-    bars = 0
+    counts = {'plan_lines': 0, 'cut_lines': 0, 'bars_3d': 0}
     for bar in validated['bars_3d']:
         draw_poly_3d(bar['vertices'], bar['closed'], class_name)
-        bars += 1
-    plan_count = _execute_plan_lines(
+        counts['bars_3d'] += 1
+    counts['plan_lines'] = _execute_plan_lines(
         pio_handle, validated['plan_lines'], class_name
     )
-    cut_count, cut_results = _execute_cut_lines(
+    counts['cut_lines'] = _execute_cut_lines(
         pio_handle, validated['cut_lines'], class_name
     )
     # Top/Plan ビューが断面コンポーネントを表示しないよう Top に固定する
-    top_view_result = set_top_plan_view_component(pio_handle)
-    return {
-        'plan_lines': plan_count,
-        'cut_lines': cut_count,
-        'bars_3d': bars,
-        'diagnostic': {
-            'top_plan_view': top_view_result,
-            'cut': cut_results,
-        },
-    }
+    set_top_plan_view_component(pio_handle)
+    return counts
