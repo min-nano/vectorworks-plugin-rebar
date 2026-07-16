@@ -109,6 +109,19 @@ class TestExecuteDocument:
         assert vs_mock.OpenPoly.called
         assert vs_mock.ClosePoly.called
 
+    def test_2d_lines_placed_on_screen_plane(self) -> None:
+        vs_mock = _make_vs_mock()
+        vw = _load(vs_mock)
+
+        vw.execute_document(make_document(), PIO_HANDLE)
+
+        # 平面線 2 + 断面線 1 = 3 本すべてを画面平面 (planar ref 0) に置く。
+        # 画面平面でないと Set2DComponentGroup が断面コンポーネントの
+        # コンテナへ移動できず、断面表現が平面ビューに漏れる。
+        assert vs_mock.SetPlanarRef.call_count == 3
+        for call in vs_mock.SetPlanarRef.call_args_list:
+            assert call.args[1] == 0
+
     def test_plan_lines_assigned_to_top_plan_component(self) -> None:
         vs_mock = _make_vs_mock()
         vw = _load(vs_mock)

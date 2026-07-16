@@ -12,6 +12,29 @@ from typing import Any, Sequence
 
 import vs
 
+# 画面平面(screen plane)の planar ref ID(vs のリファレンス: screen
+# plane = 0)。2D コンポーネントのグループは画面平面のオブジェクトである
+# 必要がある。層平面(layer plane)のままだと ``Set2DComponentGroup`` が
+# 断面コンポーネントのコンテナへオブジェクトを移動できず、断面表現が
+# デザインレイヤの平面ビュー(Top/Plan)に残って表示されてしまう。
+SCREEN_PLANE_REF = 0
+
+
+def set_screen_plane(handle: Any) -> None:
+    """2D 図形を画面平面(screen plane)に置く。
+
+    2D コンポーネント(Top/Plan・断面)のグループは画面平面のオブジェクト
+    でないと ``Set2DComponentGroup`` が各コンポーネントのコンテナへ正しく
+    移動できず、断面表現が平面ビューに漏れて表示される。``SetPlanarRef``
+    が無い環境(VW 2018 以前)では 2D コンポーネントの仕組み自体が無いので
+    何もしない(層平面の 2D 線がそのまま平面ビューの表現になる)。
+    """
+    try:
+        setter = vs.SetPlanarRef
+    except AttributeError:
+        return
+    setter(handle, SCREEN_PLANE_REF)
+
 
 def set_class_with_attributes(handle: Any, class_name: str) -> None:
     """クラスを割り当て、描画属性をすべてクラス属性に従わせる。
@@ -37,12 +60,15 @@ def draw_line_2d(
 ) -> Any:
     """2D の線を描き、ハンドルを返す。
 
-    PIO リセット中に作られた 2D 図形は PIO 本体(Top/Plan)の内容になる。
+    PIO リセット中に作られた 2D 図形は PIO 本体の内容になる。2D
+    コンポーネント(Top/Plan・断面)に振り分けられるよう画面平面
+    (screen plane)に置く(``set_screen_plane`` 参照)。
     """
     vs.MoveTo((start[0], start[1]))
     vs.LineTo((end[0], end[1]))
     handle = vs.LNewObj()
     if handle != vs.Handle(0):
+        set_screen_plane(handle)
         set_class_with_attributes(handle, class_name)
     return handle
 
