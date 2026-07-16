@@ -91,17 +91,14 @@ class TestExecuteDocument:
         # ビューに表示されないようにする
         vs_mock.SetTopPlan2DComp.assert_called_once_with(PIO_HANDLE, 0)
 
-    def test_diagnostic_reports_raw_component_results(self) -> None:
+    def test_int_zero_return_counts_as_success(self) -> None:
         vs_mock = _make_vs_mock()
         vs_mock.Set2DComponentGroup.return_value = 0  # SDK: NoError=0 を成功扱い
         vw = _load(vs_mock)
 
         result = vw.execute_document(make_document(), PIO_HANDLE)
 
-        # 生の戻り値(int 0 = 成功)を診断情報に含める
-        diag = result['diagnostic']
-        assert diag['cut']['front_back']['set'] == 0
-        # int 0 (NoError) は成功として数える
+        # int 0 (ESetSpecialGroupErrors.NoError) は成功として数える
         assert result['cut_lines'] == 1
 
     def test_plan_lines_drawn_with_class(self) -> None:
@@ -182,13 +179,11 @@ class TestExecuteDocument:
         vs_mock = _make_vs_mock()
         vw = _load(vs_mock)
 
-        result = vw.execute_document(make_document(), PIO_HANDLE)
+        vw.execute_document(make_document(), PIO_HANDLE)
 
-        # 割り当て成功後、断面線グループを regen(平面ビュー)から削除する
+        # 割り当て後、断面線グループを regen(平面ビュー)から削除する。
+        # コンポーネント側にはコピーが残るため断面ビューポートには残る。
         assert vs_mock.DelObject.call_count == 1
-        # 削除後にコンポーネントが残っているか(コピーか参照か)を診断する
-        assert vs_mock.Get2DComponentGroup.called
-        assert result['diagnostic']['cut']['front_back']['kept'] is True
 
     def test_component_failure_deletes_group(self) -> None:
         vs_mock = _make_vs_mock()
