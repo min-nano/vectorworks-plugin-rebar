@@ -13,12 +13,13 @@
 平面ビューは主筋を軸方向の線(上下端で平面位置が重なる線は 1 本に
 まとめる)、せん断補強筋を軸直交の短線(足の内法幅)で描く。
 
-断面 2D コンポーネントは最長区間の向きで決める: 区間が X 軸寄り
+断面 2D コンポーネントは区間ごとに実位置へ生成する: 区間が X 軸寄り
 なら横断面(主筋=×・せん断補強筋=矩形)を左右の断面(left_right)に、
 縦断面(主筋=水平線・せん断補強筋=等ピッチの縦線)を前後の断面
-(front_back)に置く。Y 軸寄りなら逆。斜めの梁は近い側の軸に寄せた
-近似になる(2D コンポーネントは物体のローカル軸 6 方向にしか
-持てないため)。
+(front_back)に置く。Y 軸寄りなら逆。区間ごとに生成することで、
+折れ線・矩形パスでも各区間を切断した位置に断面が表示される。斜めの
+区間は近い側の軸に寄せた近似になる(2D コンポーネントは物体の
+ローカル軸 6 方向にしか持てないため)。
 """
 from __future__ import annotations
 
@@ -86,6 +87,93 @@ def _stirrup_positions(length: float, pitch: float) -> List[float]:
         positions.append(along)
         along += pitch
     return positions
+
+
+def _segment_cut_lines(
+    segment: _Segment,
+    main_bars: List[Tuple[float, float, float]],
+    stirrup: Optional[BarPitch],
+    half_width: float,
+    z_stirrup_top: float,
+    z_stirrup_bottom: float,
+    mark_scale: float,
+) -> List[CutLineCommand]:
+    """1 区間の断面 2D コンポーネント(横断面・縦断面)を組み立てる。
+
+    区間が X 軸寄りなら横断面(主筋=×・せん断補強筋=矩形)を左右の断面
+    (left_right)に、縦断面(主筋=水平線・せん断補強筋=等ピッチの縦線)を
+    前後の断面(front_back)に置く。Y 軸寄りなら逆。区間ごとに実位置へ
+    生成することで、折れ線・矩形パスでも各区間を切断した位置に断面が出る。
+    斜めの区間は近い側の軸に寄せた近似になる。
+    """
+    commands: List[CutLineCommand] = []
+    x_dominant = abs(segment.axis[0]) >= abs(segment.axis[1])
+    cross_target = TARGET_LEFT_RIGHT if x_dominant else TARGET_FRONT_BACK
+    length_target = TARGET_FRONT_BACK if x_dominant else TARGET_LEFT_RIGHT
+    # 横断面の紙面 u 軸 = 軸と直交する平面軸 / 縦断面の紙面 u 軸 = 軸方向の平面軸
+    cross_axis = 1 if x_dominant else 0
+    length_axis = 0 if x_dominant else 1
+    mid = segment.point_at(segment.length / 2.0, 0.0)
+    center_u = mid[cross_axis]
+    lateral_sign = segment.lateral[cross_axis]
+    z_top_abs = segment.z_top
+
+    # 横断面: せん断補強筋の矩形
+    if stirrup is not None:
+        u1 = center_u - half_width * abs(lateral_sign)
+        u2 = center_u + half_width * abs(lateral_sign)
+        v1 = z_top_abs + z_stirrup_bottom
+        v2 = z_top_abs + z_stirrup_top
+        for start, end in (
+            ((u1, v1), (u2, v1)),
+            ((u2, v1), (u2, v2)),
+            ((u2, v2), (u1, v2)),
+            ((u1, v2), (u1, v1)),
+        ):
+            commands.append(
+                {
+                    'target': cross_target,
+                    'start': [start[0], start[1]],
+                    'end': [end[0], end[1]],
+                }
+            )
+    # 横断面: 主筋の × 記号
+    for offset, z, dia in main_bars:
+        u = center_u + offset * lateral_sign
+        commands.extend(
+            cross_cut_lines(cross_target, u, z_top_abs + z, dia * mark_scale)
+        )
+
+    # 縦断面: 主筋の水平線(上下端それぞれ 1 本)
+    a1 = segment.start[length_axis]
+    a2 = segment.end[length_axis]
+    u_min, u_max = min(a1, a2), max(a1, a2)
+    seen_z = set()
+    for _offset, z, _dia in main_bars:
+        key = round(z, _OFFSET_ROUND)
+        if key in seen_z:
+            continue
+        seen_z.add(key)
+        commands.append(
+            {
+                'target': length_target,
+                'start': [u_min, z_top_abs + z],
+                'end': [u_max, z_top_abs + z],
+            }
+        )
+    # 縦断面: せん断補強筋の縦線(等ピッチ)
+    if stirrup is not None:
+        axis_sign = segment.axis[length_axis]
+        for along in _stirrup_positions(segment.length, stirrup.pitch):
+            u = segment.start[length_axis] + along * axis_sign
+            commands.append(
+                {
+                    'target': length_target,
+                    'start': [u, z_top_abs + z_stirrup_bottom],
+                    'end': [u, z_top_abs + z_stirrup_top],
+                }
+            )
+    return commands
 
 
 def build_beam_commands(
@@ -188,74 +276,20 @@ def build_beam_commands(
                         'closed': True,
                     }
                 )
-
-    # 断面 2D コンポーネント: 最長区間の向きで割り当てる
-    longest = max(segments, key=lambda s: s.length)
-    x_dominant = abs(longest.axis[0]) >= abs(longest.axis[1])
-    cross_target = TARGET_LEFT_RIGHT if x_dominant else TARGET_FRONT_BACK
-    length_target = TARGET_FRONT_BACK if x_dominant else TARGET_LEFT_RIGHT
-    # 横断面の紙面 u 軸 = 軸と直交する平面軸 / 縦断面の紙面 u 軸 = 軸方向の平面軸
-    cross_axis = 1 if x_dominant else 0
-    length_axis = 0 if x_dominant else 1
-    mid = longest.point_at(longest.length / 2.0, 0.0)
-    center_u = mid[cross_axis]
-    lateral_sign = longest.lateral[cross_axis]
-    z_top_abs = longest.z_top
-
-    # 横断面: せん断補強筋の矩形
-    if stirrup is not None:
-        u1 = center_u - half_width * abs(lateral_sign)
-        u2 = center_u + half_width * abs(lateral_sign)
-        v1 = z_top_abs + z_stirrup_bottom
-        v2 = z_top_abs + z_stirrup_top
-        for start, end in (
-            ((u1, v1), (u2, v1)),
-            ((u2, v1), (u2, v2)),
-            ((u2, v2), (u1, v2)),
-            ((u1, v2), (u1, v1)),
-        ):
-            cut_lines.append(
-                {
-                    'target': cross_target,
-                    'start': [start[0], start[1]],
-                    'end': [end[0], end[1]],
-                }
-            )
-    # 横断面: 主筋の × 記号
-    for offset, z, dia in main_bars:
-        u = center_u + offset * lateral_sign
+        # 断面 2D コンポーネント: 区間ごとに生成する。折れ線・矩形パスでも
+        # 各区間を切断した位置に断面が出るよう、区間の向きに応じた target へ
+        # 割り当てる(2D コンポーネントはローカル軸 6 方向にしか持てないため、
+        # 各区間は近い軸の表現に寄せた近似)。
         cut_lines.extend(
-            cross_cut_lines(cross_target, u, z_top_abs + z, dia * mark_scale)
-        )
-
-    # 縦断面: 主筋の水平線(上下端それぞれ 1 本)
-    a1 = longest.start[length_axis]
-    a2 = longest.end[length_axis]
-    u_min, u_max = min(a1, a2), max(a1, a2)
-    seen_z = set()
-    for _offset, z, _dia in main_bars:
-        key = round(z, _OFFSET_ROUND)
-        if key in seen_z:
-            continue
-        seen_z.add(key)
-        cut_lines.append(
-            {
-                'target': length_target,
-                'start': [u_min, z_top_abs + z],
-                'end': [u_max, z_top_abs + z],
-            }
-        )
-    # 縦断面: せん断補強筋の縦線(等ピッチ)
-    if stirrup is not None:
-        axis_sign = longest.axis[length_axis]
-        for along in _stirrup_positions(longest.length, stirrup.pitch):
-            u = longest.start[length_axis] + along * axis_sign
-            cut_lines.append(
-                {
-                    'target': length_target,
-                    'start': [u, z_top_abs + z_stirrup_bottom],
-                    'end': [u, z_top_abs + z_stirrup_top],
-                }
+            _segment_cut_lines(
+                segment,
+                main_bars,
+                stirrup,
+                half_width,
+                z_stirrup_top,
+                z_stirrup_bottom,
+                mark_scale,
             )
+        )
 
     return plan_lines, cut_lines, bars_3d
