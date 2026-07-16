@@ -218,6 +218,36 @@ class TestBeamVariants:
         ]
         assert len(main) == 6
 
+    def test_cut_section_generated_per_segment(self) -> None:
+        # L 字パス: 区間1 = X 方向 (0-4000)、区間2 = Y 方向 (X=4000, 0-2000)。
+        # 区間ごとに断面を生成するため、区間1 の横断面は left_right、区間2 の
+        # 横断面は front_back に × 記号として現れる(最長区間だけだと区間2 の
+        # 断面が出なかった)。
+        document = build_document(
+            make_params(
+                path=[
+                    [0.0, 0.0, 0.0],
+                    [4000.0, 0.0, 0.0],
+                    [4000.0, 2000.0, 0.0],
+                ]
+            )
+        )
+        fb_marks = [
+            line
+            for line in document['cut_lines']
+            if line['target'] == TARGET_FRONT_BACK and _is_diagonal(line)
+        ]
+        lr_marks = [
+            line
+            for line in document['cut_lines']
+            if line['target'] == TARGET_LEFT_RIGHT and _is_diagonal(line)
+        ]
+        # 区間1 (X 方向) の横断面 × 記号
+        assert lr_marks
+        # 区間2 (Y 方向) の横断面 × 記号。区間2 の中点 X≈4000 付近に位置する。
+        assert fb_marks
+        assert any(abs(line['start'][0] - 4000.0) < 200.0 for line in fb_marks)
+
 
 class TestBeamErrors:
     def test_path_too_short(self) -> None:
