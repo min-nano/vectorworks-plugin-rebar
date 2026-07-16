@@ -90,29 +90,32 @@ def component_set_succeeded(result: Any) -> bool:
     return False
 
 
-def set_custom_object_profile_group(
-    pio_handle: Any, group_handle: Optional[Any]
-) -> Any:
-    """パス custom object の 2D プロファイル(Top/Plan に出る 2D)を固定する。
+def get_component_group(pio_handle: Any, component: int) -> Any:
+    """指定した 2D コンポーネントのグループハンドルを取得する。
 
-    リセットで描いた全図形が既定で PIO のプロファイル(= デザインレイヤの
-    平面ビューに表示される 2D)になるため、断面線もそのまま平面ビューに
-    漏れる(``Set2DComponentGroup`` が成功=True を返してもプロファイルから
-    取り除かれない)。プロファイルを平面線グループに固定することで、平面
-    ビューには平面線だけを表示する。
-
-    ``SetCustomObjectProfileGroup`` が無い環境や例外時は
+    ``Set2DComponentGroup`` + ``DelObject`` の後にこれを呼び、コンポーネントに
+    まだグループが残っているか(= 断面線がコンポーネント側にコピーされて
+    いるか)を確認する診断に使う。関数が無い環境や例外時は
     ``COMPONENT_SET_UNAVAILABLE`` を返す。
     """
     try:
-        setter = vs.SetCustomObjectProfileGroup
+        getter = vs.Get2DComponentGroup
     except AttributeError:
         return COMPONENT_SET_UNAVAILABLE
-    handle = group_handle if group_handle is not None else vs.Handle(0)
     try:
-        return setter(pio_handle, handle)
+        return getter(pio_handle, component)
     except Exception:
         return COMPONENT_SET_UNAVAILABLE
+
+
+def handle_is_valid(handle: Any) -> bool:
+    """ハンドルが NULL(``vs.Handle(0)``)でない有効なものかを判定する。"""
+    if handle is None or handle == COMPONENT_SET_UNAVAILABLE:
+        return False
+    try:
+        return handle != vs.Handle(0)
+    except Exception:
+        return handle is not None
 
 
 def set_top_plan_view_component(pio_handle: Any) -> Any:

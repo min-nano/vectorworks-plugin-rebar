@@ -72,10 +72,14 @@ def _diagnostic_message(result: dict) -> str:
     """
     diag = result.get('diagnostic', {})
     cut = diag.get('cut', {})
+
+    def fmt(target: str) -> str:
+        entry = cut.get(target) or {}
+        return f"set={entry.get('set')!r},kept={entry.get('kept')!r}"
+
     return (
         f"配筋: 平面{result.get('plan_lines', 0)} "
         f"断面{result.get('cut_lines', 0)} 3D{result.get('bars_3d', 0)} | "
-        f"profile={diag.get('profile')!r} "
-        f"FB={cut.get('front_back')!r} LR={cut.get('left_right')!r} "
+        f"FB[{fmt('front_back')}] LR[{fmt('left_right')}] "
         f"topview={diag.get('top_plan_view')!r}"
     )

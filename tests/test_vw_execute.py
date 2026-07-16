@@ -100,7 +100,7 @@ class TestExecuteDocument:
 
         # 生の戻り値(int 0 = 成功)を診断情報に含める
         diag = result['diagnostic']
-        assert diag['cut']['front_back'] == 0
+        assert diag['cut']['front_back']['set'] == 0
         # int 0 (NoError) は成功として数える
         assert result['cut_lines'] == 1
 
@@ -113,8 +113,7 @@ class TestExecuteDocument:
         # 平面線 2 + 断面線 1 = 3 本の MoveTo/LineTo
         assert vs_mock.MoveTo.call_count == 3
         assert vs_mock.LineTo.call_count == 3
-        # 描画順は断面線 → 平面線(プロファイル固定を最後にするため)。
-        # 平面線 (0,0)->(100,0) が描かれていることを確認する。
+        # 平面線 (0,0)->(100,0) が描かれていることを確認する
         starts = {c.args[0] for c in vs_mock.MoveTo.call_args_list}
         ends = {c.args[0] for c in vs_mock.LineTo.call_args_list}
         assert (0.0, 0.0) in starts
@@ -144,25 +143,24 @@ class TestExecuteDocument:
 
         vw.execute_document(make_document(), PIO_HANDLE)
 
-        # 平面線 2 + 断面線 1 = 3 本すべてを画面平面 (planar ref 0) に置く。
-        # 画面平面でないと Set2DComponentGroup が断面コンポーネントの
-        # コンテナへ移動できず、断面表現が平面ビューに漏れる。
+        # 平面線 2 + 断面線 1 = 3 本すべてを画面平面 (planar ref 0) に置く
+        # (Set2DComponentGroup は画面平面のグループを要求するため)。
         assert vs_mock.SetPlanarRef.call_count == 3
         for call in vs_mock.SetPlanarRef.call_args_list:
             assert call.args[1] == 0
 
-    def test_plan_lines_set_as_profile_group(self) -> None:
+    def test_plan_lines_drawn_plainly_not_grouped(self) -> None:
         vs_mock = _make_vs_mock()
         vw = _load(vs_mock)
 
         vw.execute_document(make_document(), PIO_HANDLE)
 
-        # 平面線はパスオブジェクトの 2D プロファイルに固定する。
-        # これにより平面ビューには平面線だけが表示され、断面線は漏れない。
-        vs_mock.SetCustomObjectProfileGroup.assert_called_once()
-        profile_call = vs_mock.SetCustomObjectProfileGroup.call_args_list[0]
-        assert profile_call.args[0] == PIO_HANDLE
-        assert profile_call.args[1].startswith('OBJ_')
+        # 平面線は通常の regen 2D として描く(グループ化・プロファイル固定
+        # しない)。デザインレイヤ平面ビューは regen をそのまま表示するため。
+        assert not vs_mock.SetCustomObjectProfileGroup.called
+        # グループは断面線(front_back)の 1 つだけ
+        assert vs_mock.BeginGroup.call_count == 1
+        assert vs_mock.EndGroup.call_count == 1
 
     def test_cut_lines_assigned_to_component(self) -> None:
         vs_mock = _make_vs_mock()
@@ -172,7 +170,6 @@ class TestExecuteDocument:
 
         calls = vs_mock.Set2DComponentGroup.call_args_list
         # front_back には作ったグループを、空の left_right には NULL を設定する
-        # (平面線はコンポーネントではなくプロファイルに固定するため 10 は無い)
         by_component = {c.args[2]: c.args for c in calls}
         assert set(by_component) == {6, 9}
         front_back = by_component[6]
@@ -180,9 +177,18 @@ class TestExecuteDocument:
         assert front_back[1].startswith('OBJ_')
         left_right = by_component[9]
         assert left_right[1] is vs_mock.Handle.return_value
-        # 平面線グループ + 断面線グループの 2 グループを作る
-        assert vs_mock.BeginGroup.call_count == 2
-        assert vs_mock.EndGroup.call_count == 2
+
+    def test_cut_group_deleted_from_regen(self) -> None:
+        vs_mock = _make_vs_mock()
+        vw = _load(vs_mock)
+
+        result = vw.execute_document(make_document(), PIO_HANDLE)
+
+        # 割り当て成功後、断面線グループを regen(平面ビュー)から削除する
+        assert vs_mock.DelObject.call_count == 1
+        # 削除後にコンポーネントが残っているか(コピーか参照か)を診断する
+        assert vs_mock.Get2DComponentGroup.called
+        assert result['diagnostic']['cut']['front_back']['kept'] is True
 
     def test_component_failure_deletes_group(self) -> None:
         vs_mock = _make_vs_mock()

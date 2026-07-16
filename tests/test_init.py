@@ -71,13 +71,15 @@ class TestRun:
         # 3D 鉄筋が描かれる
         assert vs_mock.Poly3D.call_count > 0
         # 両方の断面 2D コンポーネント (6/9) が設定される(平面線は
-        # コンポーネントではなくプロファイルに固定するため 10 は無い)
+        # 通常の regen 2D として描くためコンポーネント割り当てはしない)
         components = {
             c.args[2] for c in vs_mock.Set2DComponentGroup.call_args_list
         }
         assert components == {6, 9}
-        # 平面線はパスオブジェクトの 2D プロファイルに固定する
-        vs_mock.SetCustomObjectProfileGroup.assert_called_once()
+        # 平面線はプロファイル固定しない(regen をそのまま平面ビューに出す)
+        assert not vs_mock.SetCustomObjectProfileGroup.called
+        # 断面線グループは regen から削除する
+        assert vs_mock.DelObject.called
         # Top/Plan ビューを Top(0)に固定する
         vs_mock.SetTopPlan2DComp.assert_called_once_with('PIO_HANDLE', 0)
         # 診断メッセージは出るがエラーではない
