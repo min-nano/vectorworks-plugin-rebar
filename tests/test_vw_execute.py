@@ -75,9 +75,34 @@ class TestExecuteDocument:
         vs_mock = _make_vs_mock()
         vw = _load(vs_mock)
 
-        counts = vw.execute_document(make_document(), PIO_HANDLE)
+        result = vw.execute_document(make_document(), PIO_HANDLE)
 
-        assert counts == {'plan_lines': 2, 'cut_lines': 1, 'bars_3d': 2}
+        assert result['plan_lines'] == 2
+        assert result['cut_lines'] == 1
+        assert result['bars_3d'] == 2
+
+    def test_top_plan_view_fixed_to_top(self) -> None:
+        vs_mock = _make_vs_mock()
+        vw = _load(vs_mock)
+
+        vw.execute_document(make_document(), PIO_HANDLE)
+
+        # Top/Plan ビューを Top(0)に固定し、断面コンポーネントが平面
+        # ビューに表示されないようにする
+        vs_mock.SetTopPlan2DComp.assert_called_once_with(PIO_HANDLE, 0)
+
+    def test_diagnostic_reports_raw_component_results(self) -> None:
+        vs_mock = _make_vs_mock()
+        vs_mock.Set2DComponentGroup.return_value = 0  # SDK: NoError=0 を成功扱い
+        vw = _load(vs_mock)
+
+        result = vw.execute_document(make_document(), PIO_HANDLE)
+
+        # 生の戻り値(int 0 = 成功)を診断情報に含める
+        diag = result['diagnostic']
+        assert diag['cut']['front_back'] == 0
+        # int 0 (NoError) は成功として数える
+        assert result['cut_lines'] == 1
 
     def test_plan_lines_drawn_with_class(self) -> None:
         vs_mock = _make_vs_mock()

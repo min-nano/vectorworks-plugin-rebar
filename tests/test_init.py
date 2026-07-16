@@ -75,8 +75,13 @@ class TestRun:
             c.args[2] for c in vs_mock.Set2DComponentGroup.call_args_list
         }
         assert components == {6, 9, 10}
-        # エラーメッセージは出ない
-        assert not vs_mock.Message.called
+        # Top/Plan ビューを Top(0)に固定する
+        vs_mock.SetTopPlan2DComp.assert_called_once_with('PIO_HANDLE', 0)
+        # 診断メッセージは出るがエラーではない
+        assert vs_mock.Message.called
+        message = vs_mock.Message.call_args_list[-1].args[0]
+        assert message.startswith('配筋:')
+        assert 'エラー' not in message
 
     def test_beam_reset(self) -> None:
         fields = {
@@ -95,7 +100,10 @@ class TestRun:
         _run(vs_mock)
 
         assert vs_mock.Poly3D.call_count > 0
-        assert not vs_mock.Message.called
+        # 診断メッセージは出るがエラーではない
+        message = vs_mock.Message.call_args_list[-1].args[0]
+        assert message.startswith('配筋:')
+        assert 'エラー' not in message
 
     def test_spec_error_shows_message_without_crash(self) -> None:
         fields = dict(SLAB_FIELDS, MainBar='xxx')
