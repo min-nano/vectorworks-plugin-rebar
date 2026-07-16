@@ -123,30 +123,17 @@ class TestBeamAlongX:
             (92.0, -542.0),
         }
 
-    def test_longitudinal_section_goes_to_front_back(self) -> None:
+    def test_no_longitudinal_section_generated(self) -> None:
+        # 縦断面(軸方向に走る梁の立面)は生成しない。X 方向の梁では横断面が
+        # left_right に入り、front_back は空になる。これにより切断面が通らない
+        # 「紙面に平行な梁」の配筋が断面ビューポートに出ない。
         document = build_document(make_params())
-        lines = [
+        front_back = [
             line
             for line in document['cut_lines']
             if line['target'] == TARGET_FRONT_BACK
         ]
-        # 主筋 = 水平線 / せん断補強筋 = 縦線
-        main = [
-            line for line in lines if line['start'][1] == line['end'][1]
-        ]
-        stirrups = [
-            line for line in lines if line['start'][0] == line['end'][0]
-        ]
-        # 主筋: 上端・下端の水平線 2 本 (全長)
-        assert len(main) == 2
-        for line in main:
-            assert line['start'][0] == 0.0
-            assert line['end'][0] == 4000.0
-        assert {line['start'][1] for line in main} == {-58.0, -542.0}
-        # せん断補強筋: @200 の縦線 20 本
-        assert len(stirrups) == 20
-        for line in stirrups:
-            assert {line['start'][1], line['end'][1]} == {-40.0, -560.0}
+        assert front_back == []
 
 
 class TestBeamAlongY:
