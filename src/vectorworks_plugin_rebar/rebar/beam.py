@@ -10,8 +10,21 @@
 - せん断補強筋のピッチ: 各パス区間の始端から ピッチ/2 の位置を最初とし、
   以降等ピッチ(区間長がピッチ未満なら中央に 1 本)。
 
+せん断補強筋は仕様先頭の脚数で配置を切り替える(``spec.parse_stirrup``):
+
+- 1: 断面中央に縦筋 1 本のみ(上下端に 180° フック)。
+- 2: 四角状のあばら筋(上端両隅に 135° フック)。
+- 3: 四角のあばら筋 + 中央の縦筋(縦筋は 180° フック)。
+
+フックは配筋標準図(材種 SD295A を仮定)に従い、鉄筋径に応じた曲げ内法
+半径と余長で描く。曲げ内法直径は D16 以下 3d・D19 以上 4d(=内法半径
+1.5d/2d)、鉄筋中心の曲げ半径はこれに径/2 を加えた 2d/2.5d。余長は
+180° フックが 4d、135° フックが 6d。円弧は折れ線で近似する。フックは
+断面 2D コンポーネント(横断面)と 3D の両方に反映する。
+
 平面ビューは主筋を軸方向の線(上下端で平面位置が重なる線は 1 本に
-まとめる)、せん断補強筋を軸直交の短線(足の内法幅)で描く。
+まとめる)、あばら筋(脚数 2/3)を軸直交の短線(足の内法幅)で描く。
+縦筋 1 本のみ(脚数 1)は平面では点になるため平面線は描かない。
 
 断面 2D コンポーネントは区間ごとに実位置へ生成する: 区間が X 軸寄り
 なら横断面(梁を横断する切断: 主筋=×・せん断補強筋=矩形)を左右の断面
@@ -37,10 +50,132 @@ from ..document import (
     TARGET_LEFT_RIGHT,
 )
 from .slab import cross_cut_lines
-from .spec import BarCount, BarPitch, SectionSize, SpecError
+from .spec import BarCount, SectionSize, SpecError, StirrupSpec
 
 # 平面位置(幅方向オフセット)の重複をまとめる丸め (mm)
 _OFFSET_ROUND = 2
+
+# フック(曲げ加工)のパラメータ。材種 SD295A を仮定。
+# 内法直径 3d(D16 以下)/4d(D19 以上) → 内法半径 1.5d/2d。
+# 鉄筋中心の曲げ半径 = 内法半径 + 径/2。
+_INNER_RADIUS_SMALL = 1.5   # ×d, D16 以下
+_INNER_RADIUS_LARGE = 2.0   # ×d, D19 以上
+_LARGE_BAR_THRESHOLD = 16.0  # mm, これを超える径は大径扱い
+# 余長 (標準図): 180° フック = 4d、135° フック = 6d。
+_TAIL_180 = 4.0  # ×d
+_TAIL_135 = 6.0  # ×d
+# 円弧の折れ線近似の分割数。
+_ARC_SEGMENTS = 6
+
+# (s, z) 平面の点 (s = 断面幅方向オフセット, z = 天端基準の高さ)。
+_PlanarPoint = Tuple[float, float]
+
+
+def _bend_radius(diameter: float) -> float:
+    """鉄筋中心の曲げ半径を返す(内法半径 + 径/2)。"""
+    factor = (
+        _INNER_RADIUS_SMALL
+        if diameter <= _LARGE_BAR_THRESHOLD
+        else _INNER_RADIUS_LARGE
+    )
+    return factor * diameter + diameter / 2.0
+
+
+def _hook_points(
+    start: _PlanarPoint,
+    approach: _PlanarPoint,
+    turn_sign: float,
+    turn_angle: float,
+    radius: float,
+    tail_len: float,
+) -> List[_PlanarPoint]:
+    """(s, z) 平面でフック中心線を折れ線点列として返す。
+
+    ``start``(曲げ開始点)へ ``approach`` 方向で入り、``turn_sign``
+    (+1=反時計回り / -1=時計回り)に ``turn_angle`` だけ曲げ、余長
+    ``tail_len`` の直線で終わる。円弧は ``_ARC_SEGMENTS`` 分割で近似する。
+    """
+    ax, ay = approach
+    # 曲げ中心は進行方向に直交する向き(turn_sign 側)へ半径分ずれる。
+    center = (start[0] - ay * turn_sign * radius, start[1] + ax * turn_sign * radius)
+    vx = start[0] - center[0]
+    vy = start[1] - center[1]
+    points: List[_PlanarPoint] = [start]
+    for i in range(1, _ARC_SEGMENTS + 1):
+        angle = turn_sign * turn_angle * i / _ARC_SEGMENTS
+        cos_a = math.cos(angle)
+        sin_a = math.sin(angle)
+        points.append(
+            (
+                center[0] + vx * cos_a - vy * sin_a,
+                center[1] + vx * sin_a + vy * cos_a,
+            )
+        )
+    # 余長: 進行方向を turn_sign*turn_angle だけ回した向きへ直進する。
+    end_angle = turn_sign * turn_angle
+    cos_e = math.cos(end_angle)
+    sin_e = math.sin(end_angle)
+    tail_dir = (ax * cos_e - ay * sin_e, ax * sin_e + ay * cos_e)
+    end = points[-1]
+    points.append((end[0] + tail_dir[0] * tail_len, end[1] + tail_dir[1] * tail_len))
+    return points
+
+
+def _vertical_leg(
+    s: float, z_top: float, z_bottom: float, diameter: float
+) -> List[_PlanarPoint]:
+    """中央縦筋(上下端 180° フック付き)の 1 本の開いた折れ線を返す。"""
+    radius = _bend_radius(diameter)
+    tail = _TAIL_180 * diameter
+    pi = math.pi
+    top = _hook_points((s, z_top), (0.0, 1.0), 1.0, pi, radius, tail)
+    bottom = _hook_points((s, z_bottom), (0.0, -1.0), 1.0, pi, radius, tail)
+    # 上端フックを逆順にして脚を下り、そのまま下端フックへ続ける。
+    return list(reversed(top)) + bottom
+
+
+def _hoop_hooks(
+    half_width: float, z_top: float, diameter: float
+) -> List[List[_PlanarPoint]]:
+    """四角あばら筋の上端両隅に付す 135° フック(余長は断面内側へ)。"""
+    radius = _bend_radius(diameter)
+    tail = _TAIL_135 * diameter
+    angle = math.radians(135.0)
+    left = _hook_points((-half_width, z_top), (0.0, 1.0), -1.0, angle, radius, tail)
+    right = _hook_points((half_width, z_top), (0.0, 1.0), 1.0, angle, radius, tail)
+    return [left, right]
+
+
+def _stirrup_planar_shapes(
+    stirrup: StirrupSpec,
+    half_width: float,
+    z_top: float,
+    z_bottom: float,
+) -> Tuple[List[List[_PlanarPoint]], List[List[_PlanarPoint]]]:
+    """(s, z) 平面のせん断補強筋形状を (閉ループ, 開いた線) で返す。
+
+    脚数に応じて縦筋(180° フック)・四角あばら筋(135° フック)・その
+    組み合わせを組み立てる。閉ループは 3D で閉じたポリゴン、断面では矩形
+    として描く。開いた線はフックや縦筋。
+    """
+    closed: List[List[_PlanarPoint]] = []
+    open_polys: List[List[_PlanarPoint]] = []
+    diameter = stirrup.diameter
+    if stirrup.legs == 1:
+        open_polys.append(_vertical_leg(0.0, z_top, z_bottom, diameter))
+    else:
+        closed.append(
+            [
+                (-half_width, z_top),
+                (half_width, z_top),
+                (half_width, z_bottom),
+                (-half_width, z_bottom),
+            ]
+        )
+        open_polys.extend(_hoop_hooks(half_width, z_top, diameter))
+        if stirrup.legs == 3:
+            open_polys.append(_vertical_leg(0.0, z_top, z_bottom, diameter))
+    return closed, open_polys
 
 
 class _Segment:
@@ -95,7 +230,7 @@ def _stirrup_positions(length: float, pitch: float) -> List[float]:
 def _segment_cut_lines(
     segment: _Segment,
     main_bars: List[Tuple[float, float, float]],
-    stirrup: Optional[BarPitch],
+    stirrup: Optional[StirrupSpec],
     half_width: float,
     z_stirrup_top: float,
     z_stirrup_bottom: float,
@@ -123,18 +258,14 @@ def _segment_cut_lines(
     lateral_sign = segment.lateral[cross_axis]
     z_top_abs = segment.z_top
 
-    # 横断面: せん断補強筋の矩形
-    if stirrup is not None:
-        u1 = center_u - half_width * abs(lateral_sign)
-        u2 = center_u + half_width * abs(lateral_sign)
-        v1 = z_top_abs + z_stirrup_bottom
-        v2 = z_top_abs + z_stirrup_top
-        for start, end in (
-            ((u1, v1), (u2, v1)),
-            ((u2, v1), (u2, v2)),
-            ((u2, v2), (u1, v2)),
-            ((u1, v2), (u1, v1)),
-        ):
+    def to_cut(points: List[_PlanarPoint], closed: bool) -> None:
+        """(s, z) 折れ線を横断面の cut_line 群として commands へ足す。"""
+        mapped = [
+            (center_u + s * lateral_sign, z_top_abs + z) for s, z in points
+        ]
+        if closed:
+            mapped.append(mapped[0])
+        for start, end in zip(mapped, mapped[1:]):
             commands.append(
                 {
                     'target': cross_target,
@@ -142,6 +273,16 @@ def _segment_cut_lines(
                     'end': [end[0], end[1]],
                 }
             )
+
+    # 横断面: せん断補強筋(四角あばら筋 = 矩形、縦筋、フック)
+    if stirrup is not None:
+        closed_shapes, open_shapes = _stirrup_planar_shapes(
+            stirrup, half_width, z_stirrup_top, z_stirrup_bottom
+        )
+        for shape in closed_shapes:
+            to_cut(shape, closed=True)
+        for shape in open_shapes:
+            to_cut(shape, closed=False)
     # 横断面: 主筋の × 記号
     for offset, z, dia in main_bars:
         u = center_u + offset * lateral_sign
@@ -187,7 +328,7 @@ def build_beam_commands(
     section: SectionSize,
     top: Optional[BarCount],
     bottom: Optional[BarCount],
-    stirrup: Optional[BarPitch],
+    stirrup: Optional[StirrupSpec],
     cover: float,
     mark_scale: float,
 ) -> Tuple[List[PlanLineCommand], List[CutLineCommand], List[Bar3DCommand]]:
@@ -259,28 +400,40 @@ def build_beam_commands(
                     'closed': False,
                 }
             )
-        # 平面 + 3D: せん断補強筋
+        # 平面 + 3D: せん断補強筋(脚数に応じた形状・フック)
         if stirrup is not None:
+            closed_shapes, open_shapes = _stirrup_planar_shapes(
+                stirrup, half_width, z_stirrup_top, z_stirrup_bottom
+            )
             for along in _stirrup_positions(segment.length, stirrup.pitch):
-                left = segment.point_at(along, -half_width)
-                right = segment.point_at(along, half_width)
-                plan_lines.append(
-                    {
-                        'start': [left[0], left[1]],
-                        'end': [right[0], right[1]],
-                    }
-                )
-                bars_3d.append(
-                    {
-                        'vertices': [
-                            [left[0], left[1], segment.z_top + z_stirrup_top],
-                            [right[0], right[1], segment.z_top + z_stirrup_top],
-                            [right[0], right[1], segment.z_top + z_stirrup_bottom],
-                            [left[0], left[1], segment.z_top + z_stirrup_bottom],
-                        ],
-                        'closed': True,
-                    }
-                )
+                # 平面: 四角あばら筋(脚数 2/3)は幅方向の線。縦筋 1 本のみ
+                # (脚数 1)は平面では点になるため線を描かない。
+                if stirrup.legs != 1:
+                    left = segment.point_at(along, -half_width)
+                    right = segment.point_at(along, half_width)
+                    plan_lines.append(
+                        {
+                            'start': [left[0], left[1]],
+                            'end': [right[0], right[1]],
+                        }
+                    )
+                # 3D: (s, z) 平面形状を区間の実位置(断面平面)へ写像する。
+                for poly, is_closed in (
+                    [(shape, True) for shape in closed_shapes]
+                    + [(shape, False) for shape in open_shapes]
+                ):
+                    bars_3d.append(
+                        {
+                            'vertices': [
+                                [
+                                    *segment.point_at(along, s),
+                                    segment.z_top + z,
+                                ]
+                                for s, z in poly
+                            ],
+                            'closed': is_closed,
+                        }
+                    )
         # 断面 2D コンポーネント: 区間ごとに生成する。折れ線・矩形パスでも
         # 各区間を切断した位置に断面が出るよう、区間の向きに応じた target へ
         # 割り当てる(2D コンポーネントはローカル軸 6 方向にしか持てないため、

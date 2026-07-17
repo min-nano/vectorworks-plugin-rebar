@@ -8,9 +8,11 @@ from vectorworks_plugin_rebar.rebar.spec import (
     BarPitch,
     SectionSize,
     SpecError,
+    StirrupSpec,
     parse_bar_count,
     parse_bar_pitch,
     parse_section_size,
+    parse_stirrup,
 )
 
 
@@ -53,6 +55,37 @@ class TestParseBarCount:
     def test_invalid_raises(self, text: str) -> None:
         with pytest.raises(SpecError):
             parse_bar_count(text)
+
+
+class TestParseStirrup:
+    def test_no_prefix_defaults_to_two_legs(self) -> None:
+        assert parse_stirrup('D10@200') == StirrupSpec(10.0, 200.0, 2)
+
+    def test_prefix_sets_legs(self) -> None:
+        assert parse_stirrup('1-D10@250') == StirrupSpec(10.0, 250.0, 1)
+        assert parse_stirrup('2-D10@250') == StirrupSpec(10.0, 250.0, 2)
+        assert parse_stirrup('3-D13@150') == StirrupSpec(13.0, 150.0, 3)
+
+    def test_full_width(self) -> None:
+        assert parse_stirrup('３－Ｄ１０＠２５０') == StirrupSpec(10.0, 250.0, 3)
+
+    def test_empty_returns_none(self) -> None:
+        assert parse_stirrup('') is None
+        assert parse_stirrup('   ') is None
+
+    @pytest.mark.parametrize('text', ['0-D10@250', '4-D10@250', '10-D10@250'])
+    def test_unsupported_leg_count_raises(self, text: str) -> None:
+        with pytest.raises(SpecError):
+            parse_stirrup(text)
+
+    @pytest.mark.parametrize('text', ['D10', '2-D10', 'D10@', '2D10@250'])
+    def test_invalid_raises(self, text: str) -> None:
+        with pytest.raises(SpecError):
+            parse_stirrup(text)
+
+    def test_zero_pitch_raises(self) -> None:
+        with pytest.raises(SpecError):
+            parse_stirrup('2-D10@0')
 
 
 class TestParseSectionSize:
