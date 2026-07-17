@@ -5,6 +5,8 @@ VectorWorks の OIP でユーザーが入力する仕様文字列を解釈する
 - 径とピッチ: ``D10@200`` → (径 10, ピッチ 200)
 - 本数と径:   ``2-D16``   → (本数 2, 径 16)
 - 断面サイズ: ``150×450`` → (幅 150, せい 450)
+- せん断補強筋: ``D10@200`` / ``2-D10@250`` → (径, ピッチ, 脚数)。
+  先頭の脚数(1/2/3)でせん断補強筋の配置を切り替える(省略時は 2)。
 
 全角文字(Ｄ・＠・×・全角数字)での入力にも耐えるよう、パース前に
 NFKC 正規化で半角へ揃える。区切りの ``×`` は ``x``/``X``/``*`` も受け付ける。
@@ -47,10 +49,31 @@ class SectionSize(NamedTuple):
     depth: float   # せい (mm)
 
 
+class StirrupSpec(NamedTuple):
+    """せん断補強筋の仕様 (例 D10@200 / 2-D10@250)。
+
+    先頭の脚数でせん断補強筋の配置を切り替える:
+    1=縦筋 1 本のみ(180° フック)、2=四角状のあばら筋(135° フック)、
+    3=四角のあばら筋の内部に縦筋(180° フック)。省略時は 2。
+    本数のフィールド名は ``tuple.count`` メソッドと衝突しないよう ``legs``。
+    """
+
+    diameter: float  # 呼び径 (mm)
+    pitch: float     # ピッチ (mm)
+    legs: int        # 脚数 (1 / 2 / 3)
+
+
 _NUMBER = r'\d+(?:\.\d+)?'
 _BAR_PITCH_RE = re.compile(rf'^D\s*({_NUMBER})\s*@\s*({_NUMBER})$', re.IGNORECASE)
 _BAR_COUNT_RE = re.compile(rf'^(\d+)\s*-\s*D\s*({_NUMBER})$', re.IGNORECASE)
 _SECTION_RE = re.compile(rf'^({_NUMBER})\s*[x*]\s*({_NUMBER})$', re.IGNORECASE)
+_STIRRUP_RE = re.compile(
+    rf'^(?:(\d+)\s*-\s*)?D\s*({_NUMBER})\s*@\s*({_NUMBER})$', re.IGNORECASE
+)
+
+# せん断補強筋の脚数として受け付ける値 (配置モード)。
+STIRRUP_LEGS = (1, 2, 3)
+DEFAULT_STIRRUP_LEGS = 2
 
 
 def _normalize(text: str) -> str:
@@ -90,6 +113,32 @@ def parse_bar_count(text: str) -> Optional[BarCount]:
     if count <= 0 or diameter <= 0:
         raise SpecError(f'主筋仕様の本数・径は正の値にしてください: {text!r}')
     return BarCount(count, diameter)
+
+
+def parse_stirrup(text: str) -> Optional[StirrupSpec]:
+    """``D10@200`` / ``2-D10@250`` 形式(任意の脚数-径@ピッチ)をパースする。
+
+    先頭の脚数(1/2/3)でせん断補強筋の配置を切り替える。脚数を省略した
+    ``D10@200`` は 2(四角状のあばら筋)として扱う。空入力は None。
+    """
+    normalized = _normalize(text)
+    if not normalized:
+        return None
+    match = _STIRRUP_RE.match(normalized)
+    if match is None:
+        raise SpecError(
+            f'せん断補強筋仕様を解釈できません(D10@200 / 2-D10@250 の形式): {text!r}'
+        )
+    legs = int(match.group(1)) if match.group(1) is not None else DEFAULT_STIRRUP_LEGS
+    diameter = float(match.group(2))
+    pitch = float(match.group(3))
+    if diameter <= 0 or pitch <= 0:
+        raise SpecError(f'せん断補強筋の径・ピッチは正の値にしてください: {text!r}')
+    if legs not in STIRRUP_LEGS:
+        raise SpecError(
+            f'せん断補強筋の脚数(先頭の本数)は 1・2・3 のいずれかにしてください: {text!r}'
+        )
+    return StirrupSpec(diameter, pitch, legs)
 
 
 def parse_section_size(text: str) -> Optional[SectionSize]:
