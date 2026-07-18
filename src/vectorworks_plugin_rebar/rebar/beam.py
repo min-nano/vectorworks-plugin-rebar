@@ -22,6 +22,17 @@
 180° フックが 4d、135° フックが 6d。円弧は折れ線で近似する。フックは
 断面 2D コンポーネント(横断面)と 3D の両方に反映する。
 
+縦筋(180° フック)は一番高い/低い点が上端/下端主筋の中心 Z に一致する
+よう位置を合わせる(主筋を巻き込む納まり)。またフックの曲げは最小曲げ
+半径の制約で主筋へ密着できないため、現実にはフックを軸方向へ斜めに倒し、
+断面へ投影した立ち上がり幅を主筋の見付け幅(``主筋径 + せん断補強筋径``、
+例: 主筋 D13・せん断補強筋 D10 なら 10/2+13+10/2=23mm)へ収めて施工する。
+これを剛体回転(bend start を通る鉛直軸まわり)で表現し、幅方向を縮めた
+分を軸方向へ逃がす。断面 2D コンポーネントは紙面(幅方向・高さ)への投影
+なので縮んだ立ち上がり幅で現れ、3D はフックが軸方向へ傾いた姿になる
+(収まり検討時のリアリティを持たせる)。回転は剛体なので余長・曲げ半径は
+保たれる。
+
 平面ビューは主筋を軸方向の線(上下端で平面位置が重なる線は 1 本に
 まとめる)、あばら筋(脚数 2/3)を軸直交の短線(足の内法幅)で描く。
 縦筋 1 本のみ(脚数 1)は平面では点になるため平面線は描かない。
@@ -40,7 +51,7 @@
 from __future__ import annotations
 
 import math
-from typing import List, Optional, Sequence, Tuple
+from typing import List, NamedTuple, Optional, Sequence, Tuple
 
 from ..document import (
     Bar3DCommand,
@@ -69,6 +80,58 @@ _ARC_SEGMENTS = 6
 
 # (s, z) 平面の点 (s = 断面幅方向オフセット, z = 天端基準の高さ)。
 _PlanarPoint = Tuple[float, float]
+# 3D フック点 (a = 軸方向オフセット, s = 幅方向オフセット, z = 天端基準の高さ)。
+# フックを鉛直軸まわりに回して幅方向へ縮めた結果、断面(s, z)からはみ出す
+# 分を軸方向 a へ逃がす(= 斜めに施工したフックの 3D 表現)。
+_HookPoint = Tuple[float, float, float]
+
+
+class _HookContext(NamedTuple):
+    """フックが巻き付く主筋の情報(幅方向の縮小・上下フック位置合わせ用)。
+
+    ``top_dia`` / ``bottom_dia`` は上端/下端主筋の呼び径(``None`` なら主筋
+    無し)。``z_main_top`` / ``z_main_bottom`` は上端/下端主筋の中心 Z
+    (天端基準、``None`` なら主筋無し)。縦筋の 180° フックは一番高い/低い
+    点がこの主筋中心に一致するよう位置を合わせる。
+    """
+
+    top_dia: Optional[float]
+    bottom_dia: Optional[float]
+    z_main_top: Optional[float]
+    z_main_bottom: Optional[float]
+
+
+def _tilt_cos(main_dia: Optional[float], stirrup_dia: float, radius: float) -> float:
+    """フックを鉛直軸まわりに傾ける回転角の余弦を返す。
+
+    フックの曲げ(中心曲げ半径 ``radius``)は最小曲げ半径の制約で主筋へ
+    密着できるほど小さくできない(例: D10 のフックは leg 間隔 2×20=40mm)。
+    現実にはフックを軸方向へ斜めに倒し、断面へ投影した立ち上がり幅を主筋の
+    見付け幅 ``主筋径 + せん断補強筋径`` に収めて施工する。断面投影幅が
+    この見付け幅に一致する傾き角 θ の cosθ を返す(既に収まっていれば 1.0
+    =傾けない)。主筋が無ければ傾けない。
+    """
+    if main_dia is None:
+        return 1.0
+    return min(1.0, (main_dia + stirrup_dia) / (2.0 * radius))
+
+
+def _swing_hook(
+    points: List[_PlanarPoint], pivot_s: float, cos_theta: float
+) -> List[_HookPoint]:
+    """(s, z) フックを bend start(``pivot_s``)を通る鉛直軸まわりに回す。
+
+    幅方向 (s) の投影を ``cos_theta`` 倍に縮め、その分を軸方向 a へ逃がす
+    (剛体回転なので鉄筋の長さ・曲げ半径・余長は保たれる)。戻り値は
+    (a, s, z) の 3D 点列。``cos_theta`` が 1 以上なら傾けず a=0。
+    """
+    if cos_theta >= 1.0:
+        return [(0.0, s, z) for s, z in points]
+    sin_theta = math.sqrt(max(0.0, 1.0 - cos_theta * cos_theta))
+    return [
+        ((s - pivot_s) * sin_theta, pivot_s + (s - pivot_s) * cos_theta, z)
+        for s, z in points
+    ]
 
 
 def _bend_radius(diameter: float) -> float:
@@ -122,28 +185,59 @@ def _hook_points(
 
 
 def _vertical_leg(
-    s: float, z_top: float, z_bottom: float, diameter: float
-) -> List[_PlanarPoint]:
-    """中央縦筋(上下端 180° フック付き)の 1 本の開いた折れ線を返す。"""
+    s: float,
+    z_top: float,
+    z_bottom: float,
+    diameter: float,
+    hooks: _HookContext,
+) -> List[_HookPoint]:
+    """中央縦筋(上下端 180° フック付き)の 1 本の開いた折れ線を返す。
+
+    フックの一番高い/低い点が上端/下端主筋の中心 Z に一致するよう bend
+    start を移動し(主筋が無ければ ``z_top`` / ``z_bottom`` のまま)、各
+    フックを主筋の見付け幅へ傾けて幅方向へ縮める。戻り値は (a, s, z)。
+    """
     radius = _bend_radius(diameter)
     tail = _TAIL_180 * diameter
     pi = math.pi
-    top = _hook_points((s, z_top), (0.0, 1.0), 1.0, pi, radius, tail)
-    bottom = _hook_points((s, z_bottom), (0.0, -1.0), 1.0, pi, radius, tail)
+    # フック頂点 = bend start ± radius。頂点を主筋中心に合わせて bend start
+    # を求める(主筋が無ければ従来どおりせん断補強筋の上下端に置く)。
+    z_top_bend = (
+        hooks.z_main_top - radius if hooks.z_main_top is not None else z_top
+    )
+    z_bottom_bend = (
+        hooks.z_main_bottom + radius
+        if hooks.z_main_bottom is not None
+        else z_bottom
+    )
+    top = _hook_points((s, z_top_bend), (0.0, 1.0), 1.0, pi, radius, tail)
+    bottom = _hook_points((s, z_bottom_bend), (0.0, -1.0), 1.0, pi, radius, tail)
+    top_swung = _swing_hook(top, s, _tilt_cos(hooks.top_dia, diameter, radius))
+    bottom_swung = _swing_hook(
+        bottom, s, _tilt_cos(hooks.bottom_dia, diameter, radius)
+    )
     # 上端フックを逆順にして脚を下り、そのまま下端フックへ続ける。
-    return list(reversed(top)) + bottom
+    return list(reversed(top_swung)) + bottom_swung
 
 
 def _hoop_hooks(
-    half_width: float, z_top: float, diameter: float
-) -> List[List[_PlanarPoint]]:
-    """四角あばら筋の上端両隅に付す 135° フック(余長は断面内側へ)。"""
+    half_width: float, z_top: float, diameter: float, hooks: _HookContext
+) -> List[List[_HookPoint]]:
+    """四角あばら筋の上端両隅に付す 135° フック(余長は断面内側へ)。
+
+    両隅のフックは上端主筋を巻くため、上端主筋の見付け幅へ傾けて幅方向へ
+    縮める。戻り値は (a, s, z) の点列 2 本。
+    """
     radius = _bend_radius(diameter)
     tail = _TAIL_135 * diameter
     angle = math.radians(135.0)
+    cos_theta = _tilt_cos(hooks.top_dia, diameter, radius)
     left = _hook_points((-half_width, z_top), (0.0, 1.0), -1.0, angle, radius, tail)
     right = _hook_points((half_width, z_top), (0.0, 1.0), 1.0, angle, radius, tail)
-    return [left, right]
+    return [
+        _swing_hook(left, -half_width, cos_theta),
+        _swing_hook(right, half_width, cos_theta),
+    ]
 
 
 def _stirrup_planar_shapes(
@@ -151,30 +245,34 @@ def _stirrup_planar_shapes(
     half_width: float,
     z_top: float,
     z_bottom: float,
-) -> Tuple[List[List[_PlanarPoint]], List[List[_PlanarPoint]]]:
-    """(s, z) 平面のせん断補強筋形状を (閉ループ, 開いた線) で返す。
+    hooks: _HookContext,
+) -> Tuple[List[List[_HookPoint]], List[List[_HookPoint]]]:
+    """せん断補強筋形状を (閉ループ, 開いた線) で返す。点は (a, s, z)。
 
     脚数に応じて縦筋(180° フック)・四角あばら筋(135° フック)・その
     組み合わせを組み立てる。閉ループは 3D で閉じたポリゴン、断面では矩形
-    として描く。開いた線はフックや縦筋。
+    として描く。開いた線はフックや縦筋。矩形本体は断面内(a=0)、フックは
+    主筋の見付け幅へ傾けた分だけ軸方向 a を持つ。
     """
-    closed: List[List[_PlanarPoint]] = []
-    open_polys: List[List[_PlanarPoint]] = []
+    closed: List[List[_HookPoint]] = []
+    open_polys: List[List[_HookPoint]] = []
     diameter = stirrup.diameter
     if stirrup.legs == 1:
-        open_polys.append(_vertical_leg(0.0, z_top, z_bottom, diameter))
+        open_polys.append(_vertical_leg(0.0, z_top, z_bottom, diameter, hooks))
     else:
         closed.append(
             [
-                (-half_width, z_top),
-                (half_width, z_top),
-                (half_width, z_bottom),
-                (-half_width, z_bottom),
+                (0.0, -half_width, z_top),
+                (0.0, half_width, z_top),
+                (0.0, half_width, z_bottom),
+                (0.0, -half_width, z_bottom),
             ]
         )
-        open_polys.extend(_hoop_hooks(half_width, z_top, diameter))
+        open_polys.extend(_hoop_hooks(half_width, z_top, diameter, hooks))
         if stirrup.legs == 3:
-            open_polys.append(_vertical_leg(0.0, z_top, z_bottom, diameter))
+            open_polys.append(
+                _vertical_leg(0.0, z_top, z_bottom, diameter, hooks)
+            )
     return closed, open_polys
 
 
@@ -235,6 +333,7 @@ def _segment_cut_lines(
     z_stirrup_top: float,
     z_stirrup_bottom: float,
     mark_scale: float,
+    hooks: _HookContext,
 ) -> List[CutLineCommand]:
     """1 区間の断面 2D コンポーネント(横断面・縦断面)を組み立てる。
 
@@ -258,10 +357,14 @@ def _segment_cut_lines(
     lateral_sign = segment.lateral[cross_axis]
     z_top_abs = segment.z_top
 
-    def to_cut(points: List[_PlanarPoint], closed: bool) -> None:
-        """(s, z) 折れ線を横断面の cut_line 群として commands へ足す。"""
+    def to_cut(points: List[_HookPoint], closed: bool) -> None:
+        """(a, s, z) 折れ線を横断面の cut_line 群として commands へ足す。
+
+        断面 2D コンポーネントは紙面(s, z)への投影なので軸方向 a は捨てる
+        (フックの傾きは断面では幅方向の縮小として現れる)。
+        """
         mapped = [
-            (center_u + s * lateral_sign, z_top_abs + z) for s, z in points
+            (center_u + s * lateral_sign, z_top_abs + z) for _a, s, z in points
         ]
         if closed:
             mapped.append(mapped[0])
@@ -277,7 +380,7 @@ def _segment_cut_lines(
     # 横断面: せん断補強筋(四角あばら筋 = 矩形、縦筋、フック)
     if stirrup is not None:
         closed_shapes, open_shapes = _stirrup_planar_shapes(
-            stirrup, half_width, z_stirrup_top, z_stirrup_bottom
+            stirrup, half_width, z_stirrup_top, z_stirrup_bottom, hooks
         )
         for shape in closed_shapes:
             to_cut(shape, closed=True)
@@ -369,6 +472,22 @@ def build_beam_commands(
             for offset in _bar_offsets(bottom.quantity, max(half, 0.0))
         )
 
+    # フックが巻き付く主筋の情報(幅方向の縮小・上下フック位置合わせ用)。
+    hooks = _HookContext(
+        top_dia=top.diameter if top is not None else None,
+        bottom_dia=bottom.diameter if bottom is not None else None,
+        z_main_top=(
+            -cover - stirrup_dia - top.diameter / 2.0
+            if top is not None
+            else None
+        ),
+        z_main_bottom=(
+            -section.depth + cover + stirrup_dia + bottom.diameter / 2.0
+            if bottom is not None
+            else None
+        ),
+    )
+
     plan_lines: List[PlanLineCommand] = []
     cut_lines: List[CutLineCommand] = []
     bars_3d: List[Bar3DCommand] = []
@@ -403,7 +522,7 @@ def build_beam_commands(
         # 平面 + 3D: せん断補強筋(脚数に応じた形状・フック)
         if stirrup is not None:
             closed_shapes, open_shapes = _stirrup_planar_shapes(
-                stirrup, half_width, z_stirrup_top, z_stirrup_bottom
+                stirrup, half_width, z_stirrup_top, z_stirrup_bottom, hooks
             )
             for along in _stirrup_positions(segment.length, stirrup.pitch):
                 # 平面: 四角あばら筋(脚数 2/3)は幅方向の線。縦筋 1 本のみ
@@ -417,7 +536,8 @@ def build_beam_commands(
                             'end': [right[0], right[1]],
                         }
                     )
-                # 3D: (s, z) 平面形状を区間の実位置(断面平面)へ写像する。
+                # 3D: (a, s, z) 形状を区間の実位置(断面平面)へ写像する。
+                # a は軸方向オフセット(フックの傾き)なので along に足す。
                 for poly, is_closed in (
                     [(shape, True) for shape in closed_shapes]
                     + [(shape, False) for shape in open_shapes]
@@ -426,10 +546,10 @@ def build_beam_commands(
                         {
                             'vertices': [
                                 [
-                                    *segment.point_at(along, s),
+                                    *segment.point_at(along + a, s),
                                     segment.z_top + z,
                                 ]
-                                for s, z in poly
+                                for a, s, z in poly
                             ],
                             'closed': is_closed,
                         }
@@ -447,6 +567,7 @@ def build_beam_commands(
                 z_stirrup_top,
                 z_stirrup_bottom,
                 mark_scale,
+                hooks,
             )
         )
 
