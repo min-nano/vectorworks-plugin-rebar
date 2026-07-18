@@ -353,6 +353,108 @@ class TestStirrupModes:
             build_document(make_params(stirrup='4-D10@250'))
 
 
+class TestHookFitAndTilt:
+    """フックの主筋中心合わせ・立ち上がり幅への縮小・3D の傾き。"""
+
+    def _vertical_legs_3d(self, document: Any) -> list:
+        # 縦筋 = 閉じてない bar で 主筋(軸方向に長い)以外
+        return [
+            bar
+            for bar in document['bars_3d']
+            if not bar['closed']
+            and abs(bar['vertices'][-1][0] - bar['vertices'][0][0]) < 1000.0
+            and abs(
+                bar['vertices'][-1][1] - bar['vertices'][0][1]
+            )  # 縦筋は幅方向に広がる(180° フックが両側へ)
+            > 0.0
+        ]
+
+    def test_vertical_leg_hook_apex_at_main_bar_center(self) -> None:
+        # 1-D10@200 縦筋: 上端フックの頂点 = 上端主筋中心、下端フックの
+        # 一番低い点 = 下端主筋中心 (300×600, かぶり 40, 主筋 D13)。
+        document = build_document(
+            make_params(
+                section_size='300×600',
+                top_bars='2-D13',
+                bottom_bars='2-D13',
+                stirrup='1-D10@200',
+            )
+        )
+        z_main_top = -40.0 - 10.0 - 13.0 / 2.0  # -56.5
+        z_main_bottom = -600.0 + 40.0 + 10.0 + 13.0 / 2.0  # -543.5
+        legs = self._vertical_legs_3d(document)
+        assert legs
+        leg = legs[0]
+        zs = [v[2] for v in leg['vertices']]
+        assert round(max(zs), 3) == round(z_main_top, 3)
+        assert round(min(zs), 3) == round(z_main_bottom, 3)
+
+    def test_hook_width_fits_standoff(self) -> None:
+        # 断面へ投影した立ち上がり幅は主筋の見付け幅 (主筋径+補強筋径) に
+        # 収まる。縦筋の各フックは中心 (s=0) から ±(13+10)=23mm。
+        document = build_document(
+            make_params(
+                section_size='300×600',
+                top_bars='2-D13',
+                bottom_bars='2-D13',
+                stirrup='1-D10@200',
+            )
+        )
+        leg = self._vertical_legs_3d(document)[0]
+        # 縦筋は X 方向 4000mm の梁で幅方向 = Y。中心は Y=0。
+        max_lateral = max(abs(v[1]) for v in leg['vertices'])
+        assert round(max_lateral, 3) == 13.0 + 10.0
+
+    def test_hook_is_tilted_in_3d(self) -> None:
+        # 3D ではフックが軸方向 (X) へ傾く (断面では点に潰れる分を逃がす)。
+        # 傾けない場合、縦筋は全点が同じ X に乗る。
+        document = build_document(
+            make_params(
+                section_size='300×600',
+                top_bars='2-D13',
+                bottom_bars='2-D13',
+                stirrup='1-D10@200',
+            )
+        )
+        leg = self._vertical_legs_3d(document)[0]
+        x_span = max(v[0] for v in leg['vertices']) - min(
+            v[0] for v in leg['vertices']
+        )
+        assert x_span > 1.0
+
+    def test_no_tilt_when_hook_fits(self) -> None:
+        # 主筋が十分太くフックが既に見付け幅に収まる場合は傾けない
+        # (2*曲げ半径 = 40 ≤ 主筋径+補強筋径)。D32 主筋 + D10 補強筋。
+        document = build_document(
+            make_params(
+                section_size='400×800',
+                top_bars='2-D32',
+                bottom_bars='2-D32',
+                stirrup='1-D10@200',
+            )
+        )
+        leg = self._vertical_legs_3d(document)[0]
+        x_span = max(v[0] for v in leg['vertices']) - min(
+            v[0] for v in leg['vertices']
+        )
+        assert x_span < 1e-6
+
+    def test_tilt_preserves_tail_length(self) -> None:
+        # 剛体回転なので 180° フックの余長 (4d) は傾けても保たれる。
+        document = build_document(
+            make_params(
+                section_size='300×600',
+                top_bars='2-D13',
+                bottom_bars='2-D13',
+                stirrup='1-D10@200',
+            )
+        )
+        leg = self._vertical_legs_3d(document)[0]
+        verts = leg['vertices']
+        tail = math.dist(verts[-1], verts[-2])
+        assert round(tail, 3) == round(4 * 10.0, 3)
+
+
 class TestBeamErrors:
     def test_path_too_short(self) -> None:
         with pytest.raises(SpecError):
