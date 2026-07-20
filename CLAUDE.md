@@ -4,41 +4,72 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## このリポジトリについて
 
-基礎コンクリートの配筋情報を保持し、平面ビュー・3D ビュー・断面ビューポートに配筋表現を描画する VectorWorks **プラグインオブジェクト（PIO）** スクリプトです。姉妹プロジェクト `vectorworks_plugin_import_ifc_homeskz`（IFC インポート）と同じアーキテクチャ・コーディング規約・実行時自動更新の仕組みを踏襲しています。
+スラブ・壁の断面(紙面)に現れる **餅網状の配筋** を、直線を 1 本引くだけで
+注釈として描く VectorWorks **プラグインオブジェクト（PIO）** スクリプトです。
+姉妹プロジェクト `vectorworks-plugin-rebar-single`（1 本の鉄筋）・
+`vectorworks_plugin_import_ifc_homeskz`（IFC インポート）と同じアーキテクチャ・
+コーディング規約・実行時自動更新の仕組みを踏襲しています。
 
-PIO は 3D パス図形 `配筋` として VectorWorks に登録され（README の登録手順参照）、モードで動作を切り替える:
+PIO は **2D 線形図形**（Linear plug-in object）`配筋` として VectorWorks に
+登録され（README の登録手順参照）、次のように動作する:
 
-- **スラブモード**: 3D パス＝配筋平面の外形（パス平面＝スラブ天端）。主筋（`D10@200`）・配力筋（`D13@150`）・主筋方向角度・ダブル配筋（上端/下端それぞれの仕様）・スラブ厚・かぶりを保持。シングルは厚中央、ダブルはかぶり＋径を考慮した上端/下端に配筋する（主筋を外側に置く慣例）。
-- **梁モード**: 3D パス＝梁天端の中心線。断面サイズ（`150×450`）・上下端主筋（`2-D16`）・せん断補強筋（`D10@200`）・かぶりを保持。主筋はせん断補強筋の内側に等間隔で並べる。せん断補強筋は仕様先頭の脚数で配置を切り替える（`1-`＝中央縦筋 1 本・180° フック / `2-`＝四角あばら筋・135° フック / `3-`＝四角あばら筋＋中央縦筋、省略時は `2-`）。フックは配筋標準図（材種 SD295A 仮定）に従い、径に応じた曲げ内法半径（内法直径 3d/4d＝内法半径 1.5d/2d）と余長（180°=4d, 135°=6d）で断面 2D コンポーネントと 3D の両方に描く（円弧は折れ線近似）。
+- ユーザーが引いた **直線 1 本**（スラブ・壁の面）の 2 端点を読み、面線から
+  **かぶり分オフセット** した位置に配筋の断面表現を描く。
+- **紙面平行方向の鉄筋**（面に沿って紙面内を走る鉄筋）= かぶり分オフセット
+  した **2D 直線**。
+- **紙面直交方向の鉄筋**（端部が見える鉄筋）= 呼び径に応じた **断面表示記号**
+  （●／× 等、配筋標準図 KSE 2008「鉄筋の表示記号」）を、オフセット線上に
+  **ピッチ間隔** で並べる。記号定義は `vectorworks-plugin-rebar-single` の
+  `rebar/symbol.py` を踏襲する。
 
-出力は 3 系統:
+出力はすべて **2D 注釈**（ビューポート注釈または設計レイヤの 2D 図形）で、
+出力は 2 系統:
 
-1. **平面（Top/Plan）**: 配筋の 2D 線（PIO 本体のコンテンツ）。
-2. **3D**: 鉄筋の 3D ポリゴン（開いた線＝鉄筋、閉じた矩形＝あばら筋）。2D + 3D を持つことで PIO はハイブリッドオブジェクトになる。
-3. **断面 2D コンポーネント**: 断面ビューポートの「2D コンポーネントを表示」で表示される断面表現。紙面方向の鉄筋＝直線、紙面直交方向の鉄筋＝×（2 本の線に分解）。
+1. **線（`lines`）**: 紙面平行方向の鉄筋。かぶり分オフセットした 2D 直線。
+2. **断面記号（`symbol_profiles` + `mark_centers`）**: 記号 1 個分の線画
+   プロファイル（原点中心）を `mark_centers` の各位置へ平行移動して 2D の
+   線・円として描く。
 
-すべての図形は **PIO 本体の描画クラス**（`vs.GetClass(pio)`）に割り当てる。クラス指定は PIO を扱う側（PIO 本体へのクラス割り当て）で管理するため、本パッケージは固有のクラス名を持たない。
+**3D・断面 2D コンポーネントは使わない。** 以前は 3D パス図形として 3D
+ポリゴン・断面 2D コンポーネント（`Set2DComponentGroup`）を描いていたが、
+VectorWorks の作図特性との相性が悪く、2D 注釈方式へ全面刷新した（3D 描画・
+断面 2D コンポーネント・梁モード・スラブ多角形クリップをすべて撤去）。
 
-## ロードマップ
+すべての図形は **PIO 本体の描画クラス**（`vs.GetClass(pio)`）に割り当てる。
+クラス指定は PIO を扱う側（PIO 本体へのクラス割り当て）で管理するため、
+本パッケージは固有のクラス名を持たない。
 
-- **イベント対応スクリプト化**: `SetParameterVisibility` を使い、OIP のパラメータ表示をモード（スラブ/梁）に応じて切り替える（現状は両モードのパラメータが常に表示される）。
-- **自動更新の確認頻度**: 開発初期は毎リセットで更新確認する（現状）。安定後は VectorWorks セッション内の初回だけに絞り、編集操作のたびのネットワークアクセスを避ける。
+## ロードマップ・将来の拡張候補（アイデアメモ・確定した予定ではない）
 
-## 将来の拡張候補（アイデアメモ・確定した予定ではない）
-
-- 梁の腹筋・幅止め筋
-- スラブ端部の定着・余長の表現
-- 配筋量の集計（データタグ / ワークシート連携）
-- 上端筋・下端筋など層別に描画属性を分けるオプション（現状は PIO 本体のクラス 1 つに従う）
+- **2 段配筋（ダブルメッシュ）**: 上下端の 2 段を 1 オブジェクトで描く（現状は
+  面線を 2 本引いてそれぞれに配置する運用）。
+- **層の深さ差**: 紙面平行方向の鉄筋と紙面直交方向の鉄筋の層の微小な深さ差を
+  反映する（現状は同一オフセット線上に模式化）。
+- **梁・柱の断面配筋**: 別のパラメータセット・記号配置で再実装する（旧 3D 版の
+  梁モードは撤去済み）。
+- **端部の定着・余長・フック**の表現。
+- **配筋量の集計**（データタグ / ワークシート連携）。
 
 ## アーキテクチャ: 2 フェーズ分離
 
-処理は **配筋計算フェーズ** と **VectorWorks 描画フェーズ** に完全分離されている。両フェーズは JSON 直列化可能な**命令セット（ドキュメント）**だけで接続され、`vs` との密結合を避けることで検証や VectorWorks バージョンアップ対応を容易にしている。
+処理は **配筋計算フェーズ** と **VectorWorks 描画フェーズ** に完全分離されている。
+両フェーズは JSON 直列化可能な **命令セット（ドキュメント）** だけで接続され、
+`vs` との密結合を避けることで検証や VectorWorks バージョンアップ対応を容易に
+している。
 
-1. **配筋計算フェーズ（`rebar` サブパッケージ）** — `vs` に一切依存しない。PIO のパラメータとパス頂点（プレーンな dict）から、描くべき図形を命令セット（dict）として組み立てる。通常の Python 環境で単体実行・検証できる。
-2. **描画フェーズ（`vw` サブパッケージ）** — `vs` だけに依存し、配筋の知識（ピッチ・かぶり等）を持たない。命令セットを検証（`validate_document`）してから vs API で描画する。
+1. **配筋計算フェーズ（`rebar` サブパッケージ）** — `vs` に一切依存しない。
+   PIO のパラメータと面線の 2 端点（プレーンな dict）から、描くべき図形を
+   命令セット（dict）として組み立てる。通常の Python 環境で単体実行・検証できる。
+2. **描画フェーズ（`vw` サブパッケージ）** — `vs` だけに依存し、配筋の知識
+   （かぶり・記号の意味等）を持たない。命令セットを検証（`validate_document`）
+   してから vs API で描画する。
 
-命令セットのスキーマ（version・plan_lines/cut_lines/bars_3d 各命令の形式）は `document.py` の docstring に定義されている。スキーマを変更するときは `DOCUMENT_VERSION` の互換性に注意し、`TypedDict` 定義・docstring・`validate_document()` とテストも併せて更新すること。`run()` は両フェーズの間で `json.dumps`/`json.loads` を通すため、命令セットに直列化不能なオブジェクト（vs ハンドル等）を入れてはならない。
+命令セットのスキーマ（version・lines/symbol_profiles/mark_centers の各形式）は
+`document.py` の docstring に定義されている。スキーマを変更するときは
+`DOCUMENT_VERSION` の互換性に注意し、`TypedDict` 定義・docstring・
+`validate_document()` とテストも併せて更新すること。`run()` は両フェーズの間で
+`json.dumps`/`json.loads` を通すため、命令セットに直列化不能なオブジェクト
+（vs ハンドル等）を入れてはならない。
 
 ## パッケージ構造
 
@@ -49,75 +80,120 @@ src/
         document.py       # 命令セットのスキーマ定義・検証 (vs 非依存)
         rebar/            # フェーズ1: 配筋計算 (vs 非依存)
             __init__.py   # build_document(params) -> dict / 既定値定数
-            spec.py       # 仕様文字列パース (D10@200 / 2-D16 / 150×450, NFKC 正規化)
-            geometry.py   # 平面幾何 (平行線族の多角形クリップ, 偶奇則)
-            slab.py       # スラブモード → plan_lines/cut_lines/bars_3d
-            beam.py       # 梁モード → plan_lines/cut_lines/bars_3d
+            spec.py       # 仕様文字列パース (D10 / D13@200, NFKC 正規化)
+            symbol.py     # 表示記号(KSE 2008) → 線・円プロファイル
+            mesh.py       # 面線 → オフセット線 + 記号位置 (幾何)
         vw/               # フェーズ2: VectorWorks 描画 (vs 依存)
             __init__.py   # execute_document(document, pio_handle) -> 実行数 dict
-            pio.py        # PIO コンテキスト読取 (パラメータ・パス頂点 → params dict)
-            draw.py       # 2D 線・3D ポリゴンの描画 (by-class 属性)
-            component.py  # 断面 2D コンポーネントの設定 (Set2DComponentGroup)
+            pio.py        # PIO コンテキスト読取 (パラメータ・面線 2 端点 → params dict)
+            draw.py       # 2D 線・2D 円の描画 (by-class 属性)
 main.py                  # VectorWorks に登録する PIO スクリプト (実行時に自動インストール・更新)
 tests/                   # pytest 用テスト (CI は vs.py スタブを GitHub からダウンロード)
 pyproject.toml           # パッケージメタデータ
 ```
 
-`vs` を import してよいのは `vw` サブパッケージ内・`run()` 関数内・`main.py` の設定フォルダ検出（いずれも関数内の遅延 import）だけ。`rebar` サブパッケージや `document.py` に `vs` への依存を持ち込まないこと。テストもこの分離に従う: `tests/test_rebar_*.py`・`tests/test_document.py` は vs モック不要、`tests/test_vw_*.py`・`tests/test_init.py` は手書きの命令・パラメータを vs モックで実行して検証する。
+`vs` を import してよいのは `vw` サブパッケージ内・`run()` 関数内・`main.py` の
+設定フォルダ検出（いずれも関数内の遅延 import）だけ。`rebar` サブパッケージや
+`document.py` に `vs` への依存を持ち込まないこと。テストもこの分離に従う:
+`tests/test_rebar_*.py`・`tests/test_document.py` は vs モック不要、
+`tests/test_vw_*.py`・`tests/test_init.py` は手書きの命令・パラメータを vs
+モックで実行して検証する。
 
 ## コーディング規約: 型注釈
 
-すべての関数・メソッド（テストコード・モック用クロージャ含む）に引数と戻り値の型注釈を付ける。型検査は mypy で行い、CI で `mypy` を実行する（設定は `pyproject.toml` の `[tool.mypy]`、`disallow_untyped_defs` 有効）。
+すべての関数・メソッド（テストコード・モック用クロージャ含む）に引数と戻り値の
+型注釈を付ける。型検査は mypy で行い、CI で `mypy` を実行する（設定は
+`pyproject.toml` の `[tool.mypy]`、`disallow_untyped_defs` 有効）。
 
-- 各モジュール先頭に `from __future__ import annotations` を置く。Python 3.9 互換を保ちつつ `list[str]` / `X | None` 構文を使うため。
-- 命令セットの型は `document.py` の `TypedDict`（`Document` / `PlanLineCommand` / `CutLineCommand` / `Bar3DCommand`）を使う。`class` キー（作図クラス名）が予約語のため functional 構文で定義している。
-- `vs` モジュールは型スタブが存在しないため `ignore_missing_imports` で許容し、vs ハンドルは `Any` で扱う。VectorWorks 公式 `vs.py` スタブ（`tests/vs.py`）は型検査対象から除外している。
-- 検証前の命令セット（JSON 由来の信頼できない入力）を受ける関数（`validate_document()` / `execute_document()`）の引数は `Any` とし、検証済みの値だけを `Document` 型として扱う。
-- `NamedTuple` のフィールド名は `tuple` のメソッド名（`count` / `index`）と衝突させない（`BarCount.quantity`）。
+- 各モジュール先頭に `from __future__ import annotations` を置く。Python 3.9
+  互換を保ちつつ `list[str]` / `X | None` 構文を使うため。
+- 命令セットの線の型は `document.py` の `TypedDict`（`Document` / `LineCommand`）
+  を使う。断面記号プロファイル（line/circle で持つキーが異なる不均質な dict）は
+  `Profile = Dict[str, Any]` とし、実行時検証（`validate_document`）で形を保証する。
+- `vs` モジュールは型スタブが存在しないため `ignore_missing_imports` で許容し、
+  vs ハンドルは `Any` で扱う。VectorWorks 公式 `vs.py` スタブ（`tests/vs.py`）は
+  型検査対象から除外している。
+- 検証前の命令セット（JSON 由来の信頼できない入力）を受ける関数
+  （`validate_document()` / `execute_document()`）の引数は `Any` とし、検証済みの
+  値だけを `Document` 型として扱う。
 
 ## スクリプトの実行方法
 
-このスクリプトは単独の Python プログラムとして動作しません。**VectorWorks 内で PIO のリセットスクリプトとして実行する必要があります**。`vs` モジュールは VectorWorks 独自の Python スクリプト API であり、pip でインストールすることはできません。
+このスクリプトは単独の Python プログラムとして動作しません。**VectorWorks 内で
+PIO のリセットスクリプトとして実行する必要があります**。`vs` モジュールは
+VectorWorks 独自の Python スクリプト API であり、pip でインストールすることは
+できません。
 
-テストは VectorWorks の公式 `vs.py` スタブをモック対象として `pytest` で実行します（`.github/workflows/test.yml` 参照）。
+テストは VectorWorks の公式 `vs.py` スタブをモック対象として `pytest` で実行
+します（`.github/workflows/test.yml` 参照）。
 
 ## 実行時自動更新（main.py）
 
-homeskz の main.py と同じ仕組み（GitHub `main` ブランチのコミット SHA 比較 → アーカイブ直接展開 → 依存は pip）。**開発初期は頻繁に変更して試すため、リセットのたびに毎回更新を確認する**。更新した場合はキャッシュ済みモジュールを破棄するため、VectorWorks を再起動しなくても次のリセットから新しいコードが使われる。リセットは図形の移動・編集のたびに実行されるため、安定後は更新確認をセッション内の初回だけに絞る予定（ロードマップ参照）。
+姉妹プロジェクトの main.py と同じ仕組み（GitHub `main` ブランチのコミット SHA
+比較 → アーカイブ直接展開 → 依存は pip）。**開発初期は頻繁に変更して試すため、
+リセットのたびに毎回更新を確認する**。更新した場合はキャッシュ済みモジュールを
+破棄するため、VectorWorks を再起動しなくても次のリセットから新しいコードが
+使われる。
 
 ## PIO スクリプトの処理フロー
 
 `vectorworks_plugin_rebar.run()` は PIO のリセットのたびに以下を行う:
 
-1. **PIO コンテキスト読取（`vw/pio.py`）** — `vs.GetCustomObjectInfo()` で PIO ハンドルを取得し、`vs.GetRField` でパラメータを、`vs.GetCustomObjectPath` + `vs.GetPolyPt3D`（**0 始まり**インデックス）でパス頂点を読む。数値フィールドは単位付き文字列（`150.0mm`）を許容し、解釈できないフィールドはキーを省いて既定値に委ねる。`Mode` の表示値に `梁` を含めば梁モード、それ以外はスラブモード。
-2. **配筋計算（フェーズ1）** — `rebar.build_document(params)` で JSON 命令セットを組み立てる。仕様文字列の形式不正・幾何的に配筋できない入力は `SpecError`（ユーザー向け日本語メッセージ）。
+1. **PIO コンテキスト読取（`vw/pio.py`）** — `vs.GetCustomObjectInfo()` で PIO
+   ハンドルを取得し、`vs.GetRField` でパラメータを、`vs.GetSegPt1` /
+   `vs.GetSegPt2`（線形図形の始点/終点の X-Y 座標）で面線の 2 端点を読む。
+   数値フィールドは単位付き文字列（`40.0mm`）を許容し、解釈できないフィールドは
+   キーを省いて既定値に委ねる。
+2. **配筋計算（フェーズ1）** — `rebar.build_document(params)` で JSON 命令セットを
+   組み立てる。仕様文字列の形式不正・面線の長さ 0 等は `SpecError`（ユーザー
+   向け日本語メッセージ）。
 3. **JSON 経由の受け渡し** — `json.dumps` → `json.loads` を通し直列化可能性を保証。
-4. **描画（フェーズ2）** — `vw.execute_document(document, pio_handle)` が検証後、3D 鉄筋 → 平面線（regen）→ 断面 2D コンポーネントの順で描画する。
-5. **エラー表示** — リセットは頻繁に実行されるためモーダルダイアログは使わず、`vs.Message` でステータスバーに表示する（`SpecError` は入力の直し方が分かるメッセージ）。
+4. **描画（フェーズ2）** — `vw.execute_document(document, pio_handle)` が検証後、
+   線（紙面平行方向の鉄筋）→ 断面記号（各記号位置へ平行移動）の順で描画する。
+5. **エラー表示** — リセットは頻繁に実行されるためモーダルダイアログは使わず、
+   `vs.Message` でステータスバーに表示する（`SpecError` は入力の直し方が分かる
+   メッセージ）。
 
-### 断面 2D コンポーネント（vw/component.py）
+### 面線の読み取り（vw/pio.py）
 
-- **`vs.Set2DComponentGroup(pio, group, component)`（VW 2019+）** で PIO の 2D コンポーネントグループを設定する。component 定数は公式リファレンス（Table - 2D components）に基づく: `0`=未設定, `1`=Top, `2`=Bottom, `3`=Top/Bottom Cut, `4`=Front, `5`=Back, **`6`=Front and Back Cut**, `7`=Left, `8`=Right, **`9`=Left and Right Cut**, `10`=Top/Plan。
-- 命令セットの `target` との対応: `front_back` → 6（紙面 u=ローカル X・v=ローカル Z）、`left_right` → 9（紙面 u=ローカル Y・v=ローカル Z）。**紙面座標の符号（左右ビューの鏡像の扱い）と 2D コンポーネントの原点は VectorWorks 上で最終確認する**（描画フェーズは VW 上で検証する方針）。
-- **デザインレイヤの平面ビューはリセットで描いた regen（全 2D 図形）をそのまま表示する**（VW 上で確認済み）。`Set2DComponentGroup` は成功（戻り値 True）を返しても断面線を regen から取り除かないため、平面ビューに漏れる。`SetCustomObjectProfileGroup` はパス図形の**スイープ用プロファイル**を設定する関数で、これに渡すと平面線が 2D 表示から消えてしまう（＝断面線を消す用途には使えない）。
-- **平面線は通常の 2D 図形（regen）として描く**（グループ化・プロファイル固定しない）。regen をそのまま平面ビューに出す。
-- **断面線は `Set2DComponentGroup` で 6/9 に割り当てた後、元グループを `vs.DelObject` で regen から削除する**。`Set2DComponentGroup` はコンポーネント側へジオメトリを**コピー**するため、regen の元グループを消しても断面ビューポートには断面が残る（VW 上で確認済み）。割り当て成否に関わらず削除する（平面ビューに漏らさない）。
-- 断面線は `vs.BeginGroup`/`vs.EndGroup` でグループにまとめてから設定する。命令が無い target は NULL ハンドル（`vs.Handle(0)`）を設定して前回リセットのコンポーネントを消す。
-- **2D 線は画面平面（screen plane, planar ref 0）に置く**（`vw/draw.py` の `set_screen_plane` = `vs.SetPlanarRef(handle, 0)`）。`Set2DComponentGroup` は画面平面のオブジェクトのグループを要求するため。`SetPlanarRef` が無い環境（VW 2018 以前）は何もしない。
-- **`Set2DComponentGroup` の戻り値は成否判定（本数カウント）に使う**（`component_set_succeeded`）。公式 VS ラッパーは BOOLEAN（成功=True）だが、内部 SDK は `ESetSpecialGroupErrors`（NoError=0, CannotSet_BadData, CannotSet_UserSpecified）を返すため、`bool` は True を、`int` は 0（NoError）を成功として扱う。
-- **`vs.SetTopPlan2DComp(pio, 0)` で Top/Plan ビューを Top（非断面）に固定する**（0=Top, 1=Top and Bottom Cut）。Top/Plan ビューポート等で断面コンポーネントが出ないための補助的な安全策（設計レイヤの平面漏れは上記の regen 削除で解消済み）。関数が無い環境（VW 2018 以前）は何もしない。
-- 断面ビューポート側は「2D コンポーネントを表示」を有効にする必要がある（README 参照）。2D コンポーネントはオブジェクトのローカル軸 6 方向にしか持てないため、斜め方向の配筋・梁は近い軸の表現で近似される。
+- 2D 線形図形（Linear plug-in object）は始点・終点の 2 制御点を持つ。
+  `vs.GetSegPt1(pio)` / `vs.GetSegPt2(pio)` がそれぞれの X-Y 座標を返す（線・
+  壁・線形寸法の始点/終点を返す関数）。線形図形のローカル座標系で読むため、
+  描いた図形の配置・回転は VectorWorks が扱う。
+- **端点が期待どおり返るか・オフセットの左右（面のどちら側に描くか）は
+  VectorWorks 上で最終確認する**（描画フェーズは VW 上で検証する方針）。左右が
+  逆であれば `Flip` パラメータで反転できる。
+
+### 幾何の規約（rebar/mesh.py）
+
+- オフセット: 面線の法線方向（進行方向 start→end の左側 = 反時計回りに 90°）へ
+  `かぶり + 平行筋径/2` だけずらした線を紙面平行方向の鉄筋（線）とする。`flip`
+  で反対側へ。
+- 断面記号: オフセット線上に、始端から `ピッチ/2` を最初として等ピッチで並べる
+  （線長がピッチ未満なら中央に 1 本）。記号（原点中心のプロファイル）はオフ
+  セット線上に中心を置く（餅網の 2 方向を同一オフセット線上に模式化）。
+
+### 表示記号（rebar/symbol.py）
+
+- 配筋標準図（KSE 2008）「鉄筋の表示記号」に従い、呼び径ごとに断面の表示記号を
+  線画のプロファイル（line / circle）へ分解する（D10=●, D13=×, D16=⊘, D19=●,
+  D22=○, D25=⊙, D29=⊗, D32=◎, D35=⊕, D38=●⊕, D41=⊗）。姉妹プロジェクト
+  `vectorworks-plugin-rebar-single` の同名モジュールと同じ記号定義を踏襲する。
+- 記号の大きさは `呼び径 × MarkScale` を外径とした模式表現。○ 等の輪郭は
+  `filled=false` の円、● は `filled=true` の円で表す。表にない呼び径は最も近い
+  標準呼び径の記号で近似する。
 
 ### 描画の規約（vw/draw.py）
 
-- 2D 線は `vs.MoveTo` → `vs.LineTo` → `vs.LNewObj`、3D 鉄筋は `vs.OpenPoly`/`vs.ClosePoly`（開閉モードのトグル）を明示設定してから `vs.Poly3D(*座標)` → `vs.LNewObj`。
-- すべての図形を **PIO 本体の描画クラス**（`execute_document` が `vs.GetClass(pio)` で 1 回取得）に `vs.SetClass` で割り当て、描画属性（線色・塗色・太さ・線種・パターン・マーカー・透明度）を属性ごとの by-class 設定関数で**すべてクラス属性に従わせる**（homeskz の `_set_all_attributes_by_class` と同じ規約）。クラス指定・線種や色の調整は PIO を扱う側が PIO 本体のクラスで管理する。命令セットは作図クラスを持たない（`document.py` 参照）。
-
-### 幾何の規約（rebar/geometry.py・slab.py・beam.py）
-
-- スラブの線族は**多角形の面積重心を通る線を基準**に法線方向へ ±ピッチ刻みで並べる（頂点列の平行移動・並び順に対して決定的）。クリップは偶奇則（半開区間規則で頂点通過の二重カウントを防ぐ）。**多角形の境界ちょうどに乗る線は除外する**（境界上では交差判定が辺の向きに依存して非対称になるため）。
-- 断面の × 記号は「クリップ済み線分の中点を紙面軸へ投影した位置」に置く（軸整合の配筋では厳密なピッチ位置と一致する）。大きさは `呼び径 × MarkScale`。
-- 梁のせん断補強筋は各区間の始端から `ピッチ/2` を最初とし等ピッチ（区間長がピッチ未満なら中央に 1 本）。断面 2D コンポーネントは**区間ごと**に実位置へ生成し、各区間の向き（X 軸寄り/Y 軸寄り）で横断面（梁を横断する切断＝×・矩形）と縦断面（梁に沿う切断の側面図＝主筋の水平線・あばら筋の縦線）の target（left_right/front_back）を決める。VW の断面ビューポートは 3D の切断面と物体の交差から表示コンポーネントを決めるため、横断/縦断を実位置に用意することで、梁を横断した切断には横断面、梁に沿った切断（梁幅内）には側面図が表示される。折れ線・矩形パスでも各区間を切断した位置に断面が出る（2D コンポーネントはローカル軸 6 方向にしか持てないため、斜め区間は近い軸へ寄せた近似）。**ただし VW は切断方向のコンポーネントを切断位置に関係なく全て表示するため、単一方向の直線梁でのみ「横断＝横断面／沿い＝側面図」が正しく切り替わる**（横断面と側面図が別コンポーネントに分離するため）。複数方向の区間を含む折れ線梁は同じコンポーネントに横断面と側面図が混在して両方表示されるので、**1 本の梁は 1 直線でモデル化する**運用とする（README 参照）。
+- 2D 線は `vs.MoveTo` → `vs.LineTo` → `vs.LNewObj`。2D 円は `vs.Oval` →
+  `vs.LNewObj`、記号の意味に合わせ `vs.SetFPat`（塗り=1・輪郭=0）で塗り/輪郭を
+  明示する（`SetFPat` が無い/失敗する環境では非致命として無視し、クラス塗りに
+  従う）。
+- すべての図形を **PIO 本体の描画クラス**（`execute_document` が `vs.GetClass(pio)`
+  で 1 回取得）に `vs.SetClass` で割り当て、描画属性（線色・塗色・太さ・線種・
+  パターン・マーカー・透明度）を属性ごとの by-class 設定関数で **すべてクラス
+  属性に従わせる**。クラス指定・線種や色の調整は PIO を扱う側が PIO 本体の
+  クラスで管理する。命令セットは作図クラスを持たない（`document.py` 参照）。
 
 ## 開発プロセス: PR 作成と監視
 
