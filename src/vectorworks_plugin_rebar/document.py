@@ -4,48 +4,47 @@
 描画フェーズ(``vw`` パッケージ)が消費する JSON 直列化可能な dict。
 このモジュールは vs に依存しない。
 
-図形の作図クラスは命令セットには含まれない。すべての図形は描画フェーズが
-PIO 本体の描画クラス(``vs.GetClass(pio)``)に割り当てる(クラス指定は
-PIO を扱う側=PIO 本体へのクラス割り当てで管理する)。
+この PIO は **2D 線形図形**(直線 1 本)として登録され、スラブ・壁の断面
+(紙面)に現れる餅網状の配筋を、線を引くだけで注釈として描く。ユーザーが
+引いた直線(スラブ・壁の面)からかぶり分オフセットした位置に、紙面平行
+方向の鉄筋を **線**、紙面直交方向の鉄筋を **断面記号**(●/× 等、配筋標準図
+KSE 2008)で並べる。3D・断面 2D コンポーネントは使わず、すべてビュー
+ポート(または設計レイヤ)上の 2D 注釈として描く。
 
-スキーマ (version 1):
+出力は 2 系統:
+
+1. 線(``lines``): 紙面平行方向の鉄筋。かぶり分オフセットした 2D 直線。
+2. 断面記号(``symbol_profiles`` + ``mark_centers``): 紙面直交方向の鉄筋の
+   端部を表す表示記号。記号 1 個分の線画プロファイル(原点中心)を
+   ``symbol_profiles`` に 1 度だけ持ち、``mark_centers`` の各位置へ平行移動
+   して 2D の線・円として描く(ピッチ間隔で並ぶ)。
+
+すべての図形は描画フェーズが PIO 本体の描画クラス(``vs.GetClass(pio)``)に
+割り当てる。作図クラスは命令セットには含めない(クラス管理は描画フェーズ
+=PIO を扱う側)。
+
+断面記号プロファイル(``symbol_profiles``)は紙面上の線画で、原点(0, 0)を
+中心に組み立てる(``mark_centers`` の各位置へ平行移動して描く):
+
+    {"kind": "line",   "start": [u, v], "end": [u, v]}   # 線(× ・+ ・斜線)
+    {"kind": "circle", "center": [u, v], "radius": r, "filled": bool}
+        # filled=false: 輪郭の円(○ 等)
+        # filled=true:  塗り円(● 等)
+
+スキーマ (version 2):
 
     {
-        "version": 1,
-        "plan_lines": [
-            {
-                # 平面ビューに描く 2D 線。描画フェーズでグループにまとめ、
-                # Top/Plan コンポーネント(2D component 定数 10)に設定する
-                # (断面コンポーネントが平面ビューに漏れないようにするため)。
-                # 座標は PIO のローカル座標 (mm)。
-                "start": [x1, y1],
-                "end": [x2, y2]
-            }
+        "version": 2,
+        "lines": [
+            {"start": [x, y], "end": [x, y]}   # 紙面平行方向の鉄筋(2D 線)
         ],
-        "cut_lines": [
-            {
-                # 断面 2D コンポーネントに描く 2D 線。断面ビューポートの
-                # 「2D コンポーネントを表示」で表示される。紙面直交方向の
-                # 鉄筋の × 記号は解析フェーズで 2 本の線に分解される。
-                # target はどの 2D コンポーネントに置くか:
-                #   "front_back" = 前後の断面 (2D component 定数 6,
-                #                  紙面 u=ローカル X, v=ローカル Z)
-                #   "left_right" = 左右の断面 (2D component 定数 9,
-                #                  紙面 u=ローカル Y, v=ローカル Z)
-                "target": "front_back",
-                "start": [u1, v1],
-                "end": [u2, v2]
-            }
-        ],
-        "bars_3d": [
-            {
-                # 3D 表現(鉄筋の 3D ポリゴン)。閉じた形状(あばら筋等)は
-                # closed=true。座標は PIO のローカル座標 (mm)。
-                "vertices": [[x1, y1, z1], [x2, y2, z2]],
-                "closed": false
-            }
-        ]
+        "symbol_profiles": [ <profile>, ... ],  # 記号 1 個分の線画(原点中心)
+        "mark_centers": [ [cx, cy], ... ]       # 記号を描く位置(ピッチ間隔)
     }
+
+version 1 は 3D パス図形時代の別スキーマ(plan_lines/cut_lines/bars_3d)で、
+2D 注釈方式への全面刷新に伴い version 2 へ更新した(互換性なし)。命令セットは
+リセットのたびに再生成され永続化されないため、旧バージョンの読取りは不要。
 
 スキーマを変更するときは ``DOCUMENT_VERSION`` の互換性に注意し、
 TypedDict 定義・docstring・``validate_document()`` とテストも併せて
@@ -53,87 +52,77 @@ TypedDict 定義・docstring・``validate_document()`` とテストも併せて
 """
 from __future__ import annotations
 
-from typing import Any, List, TypedDict
+from typing import Any, Dict, List, TypedDict
 
-DOCUMENT_VERSION = 1
+DOCUMENT_VERSION = 2
 
-# cut_lines の target に指定できる値。
-TARGET_FRONT_BACK = 'front_back'
-TARGET_LEFT_RIGHT = 'left_right'
-CUT_TARGETS = (TARGET_FRONT_BACK, TARGET_LEFT_RIGHT)
+# symbol_profiles の kind。
+KIND_LINE = 'line'
+KIND_CIRCLE = 'circle'
+PROFILE_KINDS = (KIND_LINE, KIND_CIRCLE)
 
-class PlanLineCommand(TypedDict):
+# 断面記号プロファイル(線・円で持つキーが異なる不均質な dict)。実行時検証
+# (``validate_document``)で形を保証する ``Dict[str, Any]`` として扱う。
+Profile = Dict[str, Any]
+
+
+class LineCommand(TypedDict):
     start: List[float]
     end: List[float]
-
-
-class CutLineCommand(TypedDict):
-    target: str
-    start: List[float]
-    end: List[float]
-
-
-class Bar3DCommand(TypedDict):
-    vertices: List[List[float]]
-    closed: bool
 
 
 class Document(TypedDict):
     version: int
-    plan_lines: List[PlanLineCommand]
-    cut_lines: List[CutLineCommand]
-    bars_3d: List[Bar3DCommand]
+    lines: List[LineCommand]
+    symbol_profiles: List[Profile]
+    mark_centers: List[List[float]]
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _validate_point_2d(value: Any, where: str) -> None:
     if (
         not isinstance(value, list)
         or len(value) != 2
-        or not all(isinstance(v, (int, float)) for v in value)
+        or not all(_is_number(v) for v in value)
     ):
         raise ValueError(f'{where} は [x, y] の数値ペアである必要があります: {value!r}')
 
 
-def _validate_plan_line(command: Any, index: int) -> None:
-    where = f'plan_lines[{index}]'
+def _validate_line(command: Any, index: int) -> None:
+    where = f'lines[{index}]'
     if not isinstance(command, dict):
         raise ValueError(f'{where} は dict である必要があります')
     _validate_point_2d(command.get('start'), f'{where}.start')
     _validate_point_2d(command.get('end'), f'{where}.end')
 
 
-def _validate_cut_line(command: Any, index: int) -> None:
-    where = f'cut_lines[{index}]'
-    if not isinstance(command, dict):
+def _validate_positive(value: Any, where: str) -> None:
+    if not _is_number(value):
+        raise ValueError(f'{where} は数値である必要があります: {value!r}')
+    if value <= 0:
+        raise ValueError(f'{where} は正の値である必要があります: {value!r}')
+
+
+def _validate_profile(profile: Any, index: int) -> None:
+    where = f'symbol_profiles[{index}]'
+    if not isinstance(profile, dict):
         raise ValueError(f'{where} は dict である必要があります')
-    if command.get('target') not in CUT_TARGETS:
+    kind = profile.get('kind')
+    if kind == KIND_LINE:
+        _validate_point_2d(profile.get('start'), f'{where}.start')
+        _validate_point_2d(profile.get('end'), f'{where}.end')
+    elif kind == KIND_CIRCLE:
+        _validate_point_2d(profile.get('center'), f'{where}.center')
+        _validate_positive(profile.get('radius'), f'{where}.radius')
+        if not isinstance(profile.get('filled'), bool):
+            raise ValueError(f'{where}.filled は bool である必要があります')
+    else:
         raise ValueError(
-            f'{where}.target は {CUT_TARGETS} のいずれかである必要があります: '
-            f'{command.get("target")!r}'
+            f'{where}.kind は {PROFILE_KINDS} のいずれかである必要があります: {kind!r}'
         )
-    _validate_point_2d(command.get('start'), f'{where}.start')
-    _validate_point_2d(command.get('end'), f'{where}.end')
-
-
-def _validate_bar_3d(command: Any, index: int) -> None:
-    where = f'bars_3d[{index}]'
-    if not isinstance(command, dict):
-        raise ValueError(f'{where} は dict である必要があります')
-    vertices = command.get('vertices')
-    if not isinstance(vertices, list) or len(vertices) < 2:
-        raise ValueError(f'{where}.vertices は 2 点以上の頂点リストである必要があります')
-    for i, vertex in enumerate(vertices):
-        if (
-            not isinstance(vertex, list)
-            or len(vertex) != 3
-            or not all(isinstance(v, (int, float)) for v in vertex)
-        ):
-            raise ValueError(
-                f'{where}.vertices[{i}] は [x, y, z] の数値である必要があります: '
-                f'{vertex!r}'
-            )
-    if not isinstance(command.get('closed'), bool):
-        raise ValueError(f'{where}.closed は bool である必要があります')
 
 
 def validate_document(document: Any) -> Document:
@@ -150,14 +139,22 @@ def validate_document(document: Any) -> Document:
             f'命令セットの version が {DOCUMENT_VERSION} ではありません: '
             f'{document.get("version")!r}'
         )
-    for key, validator in (
-        ('plan_lines', _validate_plan_line),
-        ('cut_lines', _validate_cut_line),
-        ('bars_3d', _validate_bar_3d),
-    ):
-        commands = document.get(key)
-        if not isinstance(commands, list):
-            raise ValueError(f'{key} はリストである必要があります')
-        for index, command in enumerate(commands):
-            validator(command, index)
+
+    lines = document.get('lines')
+    if not isinstance(lines, list):
+        raise ValueError('lines はリストである必要があります')
+    for index, command in enumerate(lines):
+        _validate_line(command, index)
+
+    profiles = document.get('symbol_profiles')
+    if not isinstance(profiles, list):
+        raise ValueError('symbol_profiles はリストである必要があります')
+    for index, profile in enumerate(profiles):
+        _validate_profile(profile, index)
+
+    centers = document.get('mark_centers')
+    if not isinstance(centers, list):
+        raise ValueError('mark_centers はリストである必要があります')
+    for index, center in enumerate(centers):
+        _validate_point_2d(center, f'mark_centers[{index}]')
     return document  # type: ignore[return-value]

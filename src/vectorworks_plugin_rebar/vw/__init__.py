@@ -1,25 +1,17 @@
-"""フェーズ2: VectorWorks 描画。vs だけに依存する。
+"""フェーズ2: VectorWorks 描画(スラブ・壁の餅網状配筋の断面)。vs だけに依存する。
 
 命令セットを検証(``validate_document``)してから vs API で描画する。
-配筋の知識(ピッチ・かぶり等)は持たず、命令セットの図形をそのまま描く。
+配筋の知識(呼び径・記号の意味・かぶり等)は持たず、命令セットの図形を
+そのまま描く。すべての図形は PIO 本体の描画クラス(``vs.GetClass(pio)``)に
+割り当てる。
 
-すべての図形は **PIO 本体の描画クラス**(``vs.GetClass(pio)``)に割り当て、
-描画属性を by-class にする(クラス指定は PIO を扱う側=PIO 本体への
-クラス割り当てで管理する)。
+描画:
 
-描画順:
+1. 線(lines) — 紙面平行方向の鉄筋。かぶり分オフセットした 2D 直線。
+2. 断面記号 — 記号 1 個分の断面プロファイル(原点中心)を、各記号位置
+   (``mark_centers``)へ平行移動して 2D の線・円として描く。
 
-1. 3D 鉄筋(bars_3d) — 3D ビュー用の 3D ポリゴン。平面+3D の両方を
-   持つことで PIO はハイブリッドオブジェクトになる。
-2. 平面線(plan_lines) — 通常の 2D 図形(regen)として描く。デザイン
-   レイヤの平面ビューは regen をそのまま表示するため、平面線は普通に
-   描けば平面ビューに出る。
-3. 断面線(cut_lines) — target ごとにグループへまとめ、PIO の 2D
-   コンポーネント(前後の断面=6・左右の断面=9)に設定した後、元グループを
-   ``vs.DelObject`` で regen から削除する。``Set2DComponentGroup`` は
-   コンポーネント側へジオメトリをコピーするため、regen の元グループを
-   消しても断面ビューポートには断面が残り、平面ビューには漏れない。
-   命令が無い target は NULL を設定して前回リセットの残骸を消す。
+すべて 2D 注釈として描く。3D・断面 2D コンポーネントは使わない。
 """
 from __future__ import annotations
 
@@ -28,18 +20,13 @@ from typing import Any, Dict, List
 import vs
 
 from ..document import (
-    CUT_TARGETS,
-    CutLineCommand,
-    PlanLineCommand,
+    KIND_CIRCLE,
+    KIND_LINE,
+    LineCommand,
+    Profile,
     validate_document,
 )
-from .component import (
-    TARGET_COMPONENTS,
-    component_set_succeeded,
-    set_component_group,
-    set_top_plan_view_component,
-)
-from .draw import draw_line_2d, draw_poly_3d
+from .draw import draw_circle_2d, draw_line_2d
 
 __all__ = ['execute_document']
 
@@ -53,60 +40,43 @@ def _pio_class(pio_handle: Any) -> str:
     return name if isinstance(name, str) else ''
 
 
-def _execute_plan_lines(
-    pio_handle: Any, commands: List[PlanLineCommand], class_name: str
-) -> int:
-    """plan_lines を通常の 2D 図形(regen)として描く。
-
-    デザインレイヤの平面ビューはリセットで描いた regen をそのまま表示する
-    ため、平面線は普通に描けば平面ビューに出る。断面線は ``_execute_cut_lines``
-    で regen から取り除く。
-    """
+def _execute_lines(commands: List[LineCommand], class_name: str) -> int:
+    """lines(紙面平行方向の鉄筋)を 2D の直線として描く。"""
     for command in commands:
         draw_line_2d(command['start'], command['end'], class_name)
     return len(commands)
 
 
-def _execute_cut_lines(
-    pio_handle: Any, commands: List[CutLineCommand], class_name: str
+def _execute_mark_at(
+    profiles: List[Profile], center: List[float], class_name: str
+) -> None:
+    """記号の断面プロファイル(原点中心)を ``center`` へ平行移動して描く。"""
+    cx, cy = center[0], center[1]
+    for profile in profiles:
+        if profile['kind'] == KIND_LINE:
+            start, end = profile['start'], profile['end']
+            draw_line_2d(
+                [start[0] + cx, start[1] + cy],
+                [end[0] + cx, end[1] + cy],
+                class_name,
+            )
+        elif profile['kind'] == KIND_CIRCLE:
+            c = profile['center']
+            draw_circle_2d(
+                [c[0] + cx, c[1] + cy],
+                profile['radius'],
+                profile['filled'],
+                class_name,
+            )
+
+
+def _execute_marks(
+    profiles: List[Profile], centers: List[List[float]], class_name: str
 ) -> int:
-    """cut_lines を 2D コンポーネントに割り当て、regen からは取り除く。
-
-    デザインレイヤの平面ビューは regen(リセットで描いた全図形)をそのまま
-    表示するため、``Set2DComponentGroup`` で成功(True)を返しても断面線は
-    regen に残り平面ビューに漏れる。そこで割り当て後に元グループを
-    ``vs.DelObject`` で regen から削除する。``Set2DComponentGroup`` は
-    コンポーネント側へジオメトリをコピーするため、regen の元グループを
-    消しても断面ビューポートには断面が残る(VW 上で確認済み)。
-
-    命令が無い target は NULL を設定して前回リセットの残骸を消す。
-    """
-    by_target: Dict[str, List[CutLineCommand]] = {
-        target: [] for target in CUT_TARGETS
-    }
-    for command in commands:
-        by_target[command['target']].append(command)
-
-    count = 0
-    for target, component in TARGET_COMPONENTS.items():
-        lines = by_target[target]
-        if not lines:
-            # 前回リセットの断面表現が残らないよう空のコンポーネントは削除する
-            set_component_group(pio_handle, None, component)
-            continue
-        vs.BeginGroup()
-        for line in lines:
-            draw_line_2d(line['start'], line['end'], class_name)
-        vs.EndGroup()
-        group = vs.LNewObj()
-        if component_set_succeeded(
-            set_component_group(pio_handle, group, component)
-        ):
-            count += len(lines)
-        # 断面線を regen(平面ビュー)から取り除く。コンポーネント側には
-        # コピーが残るため断面ビューポートには断面が表示される。
-        vs.DelObject(group)
-    return count
+    """断面記号を各記号位置(``mark_centers``)へ描く。描いた記号の数を返す。"""
+    for center in centers:
+        _execute_mark_at(profiles, center, class_name)
+    return len(centers)
 
 
 def execute_document(document: Any, pio_handle: Any) -> Dict[str, int]:
@@ -114,16 +84,8 @@ def execute_document(document: Any, pio_handle: Any) -> Dict[str, int]:
     validated = validate_document(document)
     class_name = _pio_class(pio_handle)
 
-    counts = {'plan_lines': 0, 'cut_lines': 0, 'bars_3d': 0}
-    for bar in validated['bars_3d']:
-        draw_poly_3d(bar['vertices'], bar['closed'], class_name)
-        counts['bars_3d'] += 1
-    counts['plan_lines'] = _execute_plan_lines(
-        pio_handle, validated['plan_lines'], class_name
+    line_count = _execute_lines(validated['lines'], class_name)
+    mark_count = _execute_marks(
+        validated['symbol_profiles'], validated['mark_centers'], class_name
     )
-    counts['cut_lines'] = _execute_cut_lines(
-        pio_handle, validated['cut_lines'], class_name
-    )
-    # Top/Plan ビューが断面コンポーネントを表示しないよう Top に固定する
-    set_top_plan_view_component(pio_handle)
-    return counts
+    return {'lines': line_count, 'marks': mark_count}

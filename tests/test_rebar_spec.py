@@ -1,109 +1,69 @@
-"""配筋仕様文字列パース (rebar.spec) のテスト。vs モック不要。"""
+"""配筋仕様文字列のパース (rebar.spec) のテスト。vs 非依存。"""
 from __future__ import annotations
 
 import pytest
 
 from vectorworks_plugin_rebar.rebar.spec import (
-    BarCount,
-    BarPitch,
-    SectionSize,
+    NominalPitch,
     SpecError,
-    StirrupSpec,
-    parse_bar_count,
-    parse_bar_pitch,
-    parse_section_size,
-    parse_stirrup,
+    parse_nominal,
+    parse_nominal_pitch,
 )
 
 
-class TestParseBarPitch:
-    def test_basic(self) -> None:
-        assert parse_bar_pitch('D10@200') == BarPitch(10.0, 200.0)
+class TestParseNominal:
+    def test_with_d_prefix(self) -> None:
+        assert parse_nominal('D10') == 10
+
+    def test_without_prefix(self) -> None:
+        assert parse_nominal('13') == 13
 
     def test_lowercase_and_spaces(self) -> None:
-        assert parse_bar_pitch(' d13 @ 150 ') == BarPitch(13.0, 150.0)
+        assert parse_nominal(' d 16 ') == 16
 
-    def test_full_width(self) -> None:
-        # 全角の Ｄ・数字・＠ も NFKC 正規化で受け付ける
-        assert parse_bar_pitch('Ｄ１０＠２００') == BarPitch(10.0, 200.0)
+    def test_fullwidth(self) -> None:
+        assert parse_nominal('Ｄ１９') == 19
 
-    def test_empty_returns_none(self) -> None:
-        assert parse_bar_pitch('') is None
-        assert parse_bar_pitch('   ') is None
+    def test_blank_returns_none(self) -> None:
+        assert parse_nominal('') is None
+        assert parse_nominal('   ') is None
 
-    @pytest.mark.parametrize('text', ['D10', '10@200', 'D10@', 'D-10@200'])
-    def test_invalid_raises(self, text: str) -> None:
+    def test_rounds_to_int(self) -> None:
+        assert parse_nominal('D9.6') == 10
+
+    def test_invalid_raises(self) -> None:
         with pytest.raises(SpecError):
-            parse_bar_pitch(text)
-
-    def test_zero_pitch_raises(self) -> None:
-        with pytest.raises(SpecError):
-            parse_bar_pitch('D10@0')
-
-
-class TestParseBarCount:
-    def test_basic(self) -> None:
-        assert parse_bar_count('2-D16') == BarCount(2, 16.0)
-
-    def test_full_width(self) -> None:
-        assert parse_bar_count('２－Ｄ１６') == BarCount(2, 16.0)
-
-    def test_empty_returns_none(self) -> None:
-        assert parse_bar_count('') is None
-
-    @pytest.mark.parametrize('text', ['D16', '2D16', '2-16', '0-D16'])
-    def test_invalid_raises(self, text: str) -> None:
-        with pytest.raises(SpecError):
-            parse_bar_count(text)
-
-
-class TestParseStirrup:
-    def test_no_prefix_defaults_to_two_legs(self) -> None:
-        assert parse_stirrup('D10@200') == StirrupSpec(10.0, 200.0, 2)
-
-    def test_prefix_sets_legs(self) -> None:
-        assert parse_stirrup('1-D10@250') == StirrupSpec(10.0, 250.0, 1)
-        assert parse_stirrup('2-D10@250') == StirrupSpec(10.0, 250.0, 2)
-        assert parse_stirrup('3-D13@150') == StirrupSpec(13.0, 150.0, 3)
-
-    def test_full_width(self) -> None:
-        assert parse_stirrup('３－Ｄ１０＠２５０') == StirrupSpec(10.0, 250.0, 3)
-
-    def test_empty_returns_none(self) -> None:
-        assert parse_stirrup('') is None
-        assert parse_stirrup('   ') is None
-
-    @pytest.mark.parametrize('text', ['0-D10@250', '4-D10@250', '10-D10@250'])
-    def test_unsupported_leg_count_raises(self, text: str) -> None:
-        with pytest.raises(SpecError):
-            parse_stirrup(text)
-
-    @pytest.mark.parametrize('text', ['D10', '2-D10', 'D10@', '2D10@250'])
-    def test_invalid_raises(self, text: str) -> None:
-        with pytest.raises(SpecError):
-            parse_stirrup(text)
-
-    def test_zero_pitch_raises(self) -> None:
-        with pytest.raises(SpecError):
-            parse_stirrup('2-D10@0')
-
-
-class TestParseSectionSize:
-    def test_multiply_sign(self) -> None:
-        assert parse_section_size('150×450') == SectionSize(150.0, 450.0)
-
-    @pytest.mark.parametrize('text', ['150x450', '150X450', '150*450', '150 × 450'])
-    def test_separator_variants(self, text: str) -> None:
-        assert parse_section_size(text) == SectionSize(150.0, 450.0)
-
-    def test_empty_returns_none(self) -> None:
-        assert parse_section_size('') is None
-
-    @pytest.mark.parametrize('text', ['150', '150×', '×450', '150×450×600'])
-    def test_invalid_raises(self, text: str) -> None:
-        with pytest.raises(SpecError):
-            parse_section_size(text)
+            parse_nominal('abc')
 
     def test_zero_raises(self) -> None:
         with pytest.raises(SpecError):
-            parse_section_size('0×450')
+            parse_nominal('D0')
+
+
+class TestParseNominalPitch:
+    def test_basic(self) -> None:
+        assert parse_nominal_pitch('D13@200') == NominalPitch(13, 200.0)
+
+    def test_without_prefix(self) -> None:
+        assert parse_nominal_pitch('13@150') == NominalPitch(13, 150.0)
+
+    def test_fullwidth_at(self) -> None:
+        assert parse_nominal_pitch('Ｄ１０＠２００') == NominalPitch(10, 200.0)
+
+    def test_spaces(self) -> None:
+        assert parse_nominal_pitch('D 13 @ 250') == NominalPitch(13, 250.0)
+
+    def test_blank_returns_none(self) -> None:
+        assert parse_nominal_pitch('') is None
+
+    def test_missing_pitch_raises(self) -> None:
+        with pytest.raises(SpecError):
+            parse_nominal_pitch('D13')
+
+    def test_invalid_raises(self) -> None:
+        with pytest.raises(SpecError):
+            parse_nominal_pitch('D13x200')
+
+    def test_nonpositive_raises(self) -> None:
+        with pytest.raises(SpecError):
+            parse_nominal_pitch('D13@0')

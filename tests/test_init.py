@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, Dict, List, Tuple
+from typing import Dict, Tuple
 from unittest.mock import MagicMock, patch
 
 
 def _make_vs_mock(
-    fields: Dict[str, str], path: List[Tuple[float, float, float]]
+    fields: Dict[str, str],
+    p1: Tuple[float, float] = (0.0, 0.0),
+    p2: Tuple[float, float] = (1000.0, 0.0),
 ) -> MagicMock:
     vs_mock = MagicMock()
     null_handle = object()
@@ -15,14 +17,18 @@ def _make_vs_mock(
     vs_mock.GetCustomObjectInfo.return_value = (
         True, '配筋', 'PIO_HANDLE', 'RECORD_HANDLE', 'WALL_HANDLE',
     )
-    vs_mock.GetCustomObjectPath.return_value = 'PATH_HANDLE'
-    vs_mock.GetVertNum.return_value = len(path)
-    vs_mock.GetPolyPt3D.side_effect = lambda handle, index: path[index]
+    vs_mock.GetSegPt1.return_value = p1
+    vs_mock.GetSegPt2.return_value = p2
     vs_mock.GetRField.side_effect = (
         lambda handle, record, field: fields.get(field, '')
     )
-    vs_mock.LNewObj.return_value = 'OBJ'
-    vs_mock.Set2DComponentGroup.return_value = True
+    counter = {'n': 0}
+
+    def unique() -> str:
+        counter['n'] += 1
+        return f'OBJ_{counter["n"]}'
+
+    vs_mock.LNewObj.side_effect = unique
     vs_mock.GetClass.return_value = 'PIOクラス'
     return vs_mock
 
@@ -30,96 +36,68 @@ def _make_vs_mock(
 def _run(vs_mock: MagicMock) -> None:
     with patch.dict('sys.modules', {'vs': vs_mock}):
         import vectorworks_plugin_rebar as package
-        import vectorworks_plugin_rebar.vw.component as vw_component
         import vectorworks_plugin_rebar.vw.draw as vw_draw
         import vectorworks_plugin_rebar.vw.pio as vw_pio
         import vectorworks_plugin_rebar.vw as vw
         importlib.reload(vw_draw)
-        importlib.reload(vw_component)
         importlib.reload(vw_pio)
         importlib.reload(vw)
         package.run()
 
 
-SLAB_FIELDS = {
-    'Mode': 'スラブ',
-    'MainBar': 'D10@200',
-    'DistBar': 'D13@150',
-    'MainBarAngle': '0.0',
-    'DoubleLayer': 'False',
-    'SlabThickness': '150.0',
+FIELDS = {
+    'ParallelBar': 'D10',
+    'PerpBar': 'D13@200',
     'Cover': '40.0',
     'MarkScale': '4.0',
+    'Flip': 'False',
 }
-
-RECT_PATH = [
-    (0.0, 0.0, 0.0),
-    (2000.0, 0.0, 0.0),
-    (2000.0, 3000.0, 0.0),
-    (0.0, 3000.0, 0.0),
-]
 
 
 class TestRun:
-    def test_slab_reset_draws_all_representations(self) -> None:
-        vs_mock = _make_vs_mock(SLAB_FIELDS, RECT_PATH)
+    def test_reset_draws_line_and_marks(self) -> None:
+        vs_mock = _make_vs_mock(FIELDS)
 
         _run(vs_mock)
 
-        # 平面 2D 線 + 断面線が描かれる
+        # オフセット線 + 記号(D13 の ×)の 2D 図形が描かれる
         assert vs_mock.MoveTo.call_count > 0
-        # 3D 鉄筋が描かれる
-        assert vs_mock.Poly3D.call_count > 0
-        # 両方の断面 2D コンポーネント (6/9) が設定される(平面線は
-        # 通常の regen 2D として描くためコンポーネント割り当てはしない)
-        components = {
-            c.args[2] for c in vs_mock.Set2DComponentGroup.call_args_list
-        }
-        assert components == {6, 9}
-        # 平面線はプロファイル固定しない(regen をそのまま平面ビューに出す)
-        assert not vs_mock.SetCustomObjectProfileGroup.called
-        # 断面線グループは regen から削除する
-        assert vs_mock.DelObject.called
-        # Top/Plan ビューを Top(0)に固定する
-        vs_mock.SetTopPlan2DComp.assert_called_once_with('PIO_HANDLE', 0)
+        assert vs_mock.LineTo.call_count > 0
+        # すべて PIO 本体クラスに割り当てられる
+        classes = {c.args[1] for c in vs_mock.SetClass.call_args_list}
+        assert classes == {'PIOクラス'}
         # 正常時はエラーメッセージを出さない
         assert not vs_mock.Message.called
 
-    def test_beam_reset(self) -> None:
-        fields = {
-            'Mode': '梁',
-            'SectionSize': '300×600',
-            'TopBars': '2-D16',
-            'BottomBars': '3-D16',
-            'Stirrup': 'D10@200',
-            'Cover': '40.0',
-            'MarkScale': '4.0',
-        }
-        vs_mock = _make_vs_mock(
-            fields, [(0.0, 0.0, 0.0), (4000.0, 0.0, 0.0)]
-        )
+    def test_circle_symbol_drawn(self) -> None:
+        # D22 は ○(輪郭円)。円記号が Oval で描かれる
+        fields = dict(FIELDS, PerpBar='D22@200')
+        vs_mock = _make_vs_mock(fields)
 
         _run(vs_mock)
 
-        assert vs_mock.Poly3D.call_count > 0
-        # 正常時はエラーメッセージを出さない
-        assert not vs_mock.Message.called
+        assert vs_mock.Oval.called
 
     def test_spec_error_shows_message_without_crash(self) -> None:
-        fields = dict(SLAB_FIELDS, MainBar='xxx')
-        vs_mock = _make_vs_mock(fields, RECT_PATH)
+        fields = dict(FIELDS, PerpBar='xxx')
+        vs_mock = _make_vs_mock(fields)
 
         _run(vs_mock)
 
-        # 仕様の形式不正はステータスバーへ表示し、例外は外へ出さない
         assert vs_mock.Message.called
         message = vs_mock.Message.call_args.args[0]
         assert message.startswith('配筋: ')
-        # 図形は描かれない
         assert not vs_mock.MoveTo.called
 
+    def test_zero_length_line_shows_message(self) -> None:
+        vs_mock = _make_vs_mock(FIELDS, p1=(5.0, 5.0), p2=(5.0, 5.0))
+
+        _run(vs_mock)
+
+        assert vs_mock.Message.called
+
     def test_outside_pio_context_does_nothing(self) -> None:
-        vs_mock = _make_vs_mock(SLAB_FIELDS, RECT_PATH)
+        vs_mock = _make_vs_mock(FIELDS)
         vs_mock.GetCustomObjectInfo.return_value = (False, '', None, None, None)
 
         _run(vs_mock)
