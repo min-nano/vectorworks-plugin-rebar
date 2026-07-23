@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, Dict, Tuple
+from typing import Dict, Tuple
 from unittest.mock import MagicMock, patch
 
 
