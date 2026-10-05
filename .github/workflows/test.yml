@@ -55,7 +55,7 @@ jobs:
 
       - name: Upload coverage report to GitHub Code Quality
         if: matrix.python-version == '3.11'
-        uses: actions/upload-code-coverage@a72ab75b4dee0e479386fb9bf33c8dcf64b9c772 # v1.4.0
+        uses: actions/upload-code-coverage@2b21a77928be8d5168c2b9581a67f2adbebacc52 # v1.4.4
         with:
           file: cobertura.xml
           language: Python
